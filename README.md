@@ -26,7 +26,7 @@ Excluding `a25`, the full arguments are:
 `[s25|v25|525] [-v] [-t num_threads] [-f word-file]`
 
 - **-v** : Normally no console output is produced.  `-v` allows the executable to emit metrics
-- **-t** : Allows the user to specify the number of threads to use.  By default the executables will used 1 or 2 less threads than there are CPUs on the system
+- **-t** : Allows the user to specify the number of threads to use.  By default the executables will use 1 or 2 less threads than there are CPUs on the system
 - **-f** : Allows the user to specify an input word file to use.  By default the executables will use the words-alpha.txt file
 
 
