@@ -7,24 +7,45 @@ See: https://www.youtube.com/watch?v=_-AfhLQfb6w
 
 ### Building and Running
 
-Just run make and execute `./a25` or `./s25`
+Just run make and execute `./a25`, `./s25 -v`, `./v25 -v` or `./525 -v`
 
-**a25** should take around 0.025-0.050s to complete depending on your hardware
+I've set the default compiler to `clang-12` in the Makefile, as this produces
+the fastest executables in my testing, but edit the Makefile and switch to
+`gcc` if that's what you have
 
-**s25** should take around 0.008-0.016s to complete depending on your hardware
+s25, v25, and 525 all support the **-v** option which will emit run-time metrics
+Omit the **-v** option if measuring with the `time` shell call, however since
+it typically takes about 1ms for an executable to get up and running, the times
+reported by `time` will be slightly higher than the internally measured times.
 
-Both algorithms uses a bit-wise representation of the words for efficiency of comparing
+For speed, all solutions are written to a file named `solutions.txt` in the
+current directory
 
-`s25` is the more recent solution, and takes some arguments.  For speed, all
-solutions are written to a `solutions.txt` file.
+Excluding `a25`, the full arguments are:
 
-The arguments are:
+`[s25|v25|525] [-v] [-t num_threads] [-f word-file]`
 
-`s25 [-v] [-t num_threads] [-f word-file]`
+- **-v** : Normally no console output is produced.  `-v` allows the executable to emit metrics
+- **-t** : Allows the user to specify the number of threads to use.  By default the executables will used 1 or 2 less threads than there are CPUs on the system
+- **-f** : Allows the user to specify an input word file to use.  By default the executables will use the words-alpha.txt file
 
-- _-v_ : `s25` normally produces no console output.  `-v` allows it to emit metrics
-- _-t_ : Allows the user to specify the number of threads to use.  By default `s25` will used 2 less threads than there are CPUs on the system
-- _-f_ : Allows the user to specify an input word file to use.  By default `s25` will use the alpha words set.
+
+### Execution Times
+
+My development systems are a desktop AMD 5950x based PC, and an Intel i7-1165G7
+based laptop. On my AMD system, the following (internal) times are seen:
+
+**a25** takes around 19ms to complete, using 14 threads
+
+**s25** takes around 3.5ms to complete using 14 threads
+
+**v25** takes around 1.9ms to complete using 14 threads
+
+**525** won't run on my AMD system.  On my Intel laptop it takes 2.8ms to complete
+using 8 threads.  I estimate that on a full desktop runtimes of 1.6ms should be achievable
+
+All algorithms uses a bit-wise representation of the words for efficiency of comparing
+All algorithms also implement lockless thread co-ordination for speed.
 
 
 ### History
@@ -43,7 +64,7 @@ around 1.5ms
 After commenting on the Youtube video, I then discovered that most people were
 using the full words-alpha.txt file as a starting set, and even crazier to me,
 people were using the full ~4MB word set, instead of at least using just a set
-of only 5 letter words. Okay, I guess?
+of only the 5 letter words. Okay, I guess?
 
 My first solution did not work properly on the words-alpha input set as that set
 contains many words with no-vowels in it, thereby breaking my assumption that
@@ -59,7 +80,7 @@ of my first attempt.  Instead of using 2-vowel and 1-vowel words, it split the
 input set into one set containing the most frequently character, which also
 handily happens to be `a`, and everything else.  Using my first approach, this
 generates a set of 4-word partial solutions from the non-a words.  For
-completes it also tries to find 5-word solutions using all letters but `a`,
+completeness it also tries to find 5-word solutions using all letters but `a`,
 but none exist.
 
 Once all 4-word partial solutions are found, the `a` set is combined with the
@@ -71,11 +92,9 @@ input into multiple sets grew into my third solution attempt.
 
 ### s25
 
-You can see some dead combination code in `a25.c` which was used to create the
-idea that we could combinate over a small number of word sets to derive all
-solutions.  I included `combos.c` which is non-functional pseudo-code that
-formed the basis of `s25.  I wrote a frequency implementation that originally
-ordered all words from most frequently occurring letter to the least.  This
+I've included `combos.c` which is non-functional pseudo-code that formed the
+basis of `s25`.  I wrote a frequency implementation that originally ordered
+all words from most the frequently occurring letter to the least.  This
 approach produced just 9 word sets to represent all words and was easy to
 combinate over.
 
@@ -99,20 +118,19 @@ I then saw how Sylvester had solved the 25 instead of 26 approach with his
 clever skipping implementation that skips at the start of the combinator,
 instead of my approach that skipped at the end.  His approach actually
 applied perfectly to my code (I owe a huge debt of gratitude to his solution
-to this issue), and with that `s25` was running in around 4-5ms for the actual
-main algorithm loop, and ~5-7ms to load in the the words-alpha file, with
-overall run-times ranging from 9-14ms depending on what the system is doing.
-Run times are much less if using the words-alpha-five.txt or NYT files as input.
-
-Both a25.c and s25.c implement lockless thread co-ordination for speed.
+to this issue), and with that the initial implementation of `s25` was running
+in around 4-5ms for the actual main algorithm loop, and ~5-7ms to load in the
+the words-alpha file, with overall run-times ranging from 9-14ms depending on
+what the system is doing.  Run times were signiciantly less if using the
+words-alpha-five.txt or NYT files as input.
 
 
 ### v25
 
-`v25.c` is just `s25.c` with AVX2 instructions add for processing the key sets.
-Where `s25.c` takes ~4ms to process the main algorithm loop, `v25.c` will does
-it in around 2.1ms on my system.  This is my first time ever playing around
-with AVX instructions, so it was a fun learning experience.
+`v25.c` is just `s25.c` but with AVX2 instructions add for processing the key
+sets.  The use of AVX-2 saw the main algorithm loop be sped up by almost 3x.
+This is my first time ever playing around with AVX instructions, so it was a
+fun learning experience.
 
 
 ### 525
@@ -120,9 +138,34 @@ with AVX instructions, so it was a fun learning experience.
 `525.c` is `v25.c` with AVX-512 instructions, instead of AVX2.  This will not
 compile successfully on any platform that does not support AVX-512.
 
-AVX-512 will run the main algorithm in around 2/3rds of the time of the AVX2
+AVX-512 will run the main algorithm in around 65% of the time of the AVX2
 version.  Of course, file load times are still a significant factor, and so
-overall expect to see overall run-times at ~75% of `v25` run times
+I'd expect to see overall run-times at ~75-80% of `v25` run times.  Sadly I
+do not have a high-end AVX-512 capable desktop to verify this claim, although
+these ratios were true on the AVX-512 laptop.
+
+
+### Words Alpha File Reading
+
+A large problem I dealt with was how to quickly read in and process the 4MB
+word file.  My first attempt just processed the file with a straight mmap()
+and that saw the file get read in and processed in around 7ms.  My second
+attempt used multiple threads, which each thread working on their own portion
+of the input file.  This worked fairly well, but hash table building was a
+large source of contention. Additionally, the system doesn't really like
+many threads jumping about all over a single file.
+
+My final solution was to set the readers to incrementing an atomic integer to
+gain access to the next 8KB block of the file.  This improved locality and
+also ensured a (mostly) sequential step through the file, which boosted file
+reading times dramatically.  I then had the readers focus on finding 5 letter
+words and inserting them into an array, with an atomic integer defining where
+in the array any particular reader would insert their word.
+
+I then had the main thread process the word array that was being built by the
+reader threads to built the hash table concurrently.  Doing all this together
+managed to get file load and hash table build times to under 0.8ms on my AMD
+system.
 
 
 ### Conclusion
@@ -130,7 +173,7 @@ overall expect to see overall run-times at ~75% of `v25` run times
 I'm including the words-alpha file, plus a version of words-alpha that only has
 the 5-letter words in it, as well as the NYT Wordle sets.  It seems silly to me
 for us to be spending time finding ~80KB of 5 letter words from a ~4MB file but
-since that's what people seem to be doing, I'll include the full set here as well
+since that's what people seem to be doing, so I included the full set here.
 
 Thank you to Matt Parker for making the problem public, and all the intelligent
 and robust discussion of solutions in the Youtube comments, and a big thank you

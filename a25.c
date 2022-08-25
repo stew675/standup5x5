@@ -442,7 +442,7 @@ main(int argc, char *argv[])
 //	read_words("nyt_wordle.txt");
 
 	clock_gettime(CLOCK_MONOTONIC, ts);
-	solve(18);
+	solve(14);
 	clock_gettime(CLOCK_MONOTONIC, te);
 
 	time_taken *= (te->tv_sec - ts->tv_sec);
