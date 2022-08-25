@@ -45,6 +45,7 @@ based laptop. On my AMD system, the following (internal) times are seen:
 using 8 threads.  I estimate that on a full desktop runtimes of 1.6ms should be achievable
 
 All algorithms uses a bit-wise representation of the words for efficiency of comparing
+
 All algorithms also implement lockless thread co-ordination for speed.
 
 
@@ -163,9 +164,21 @@ words and inserting them into an array, with an atomic integer defining where
 in the array any particular reader would insert their word.
 
 I then had the main thread process the word array that was being built by the
-reader threads to built the hash table concurrently.  Doing all this together
+reader threads to build the hash table concurrently.  Doing all this together
 managed to get file load and hash table build times to under 0.8ms on my AMD
 system.
+
+
+### Clean-Up
+
+I moved all the file reading and other utility functions to a common `utilities.h`
+file that is included by the main algorithms.  In this way, any future tweaks
+should be consistent across all implementations
+
+
+### To Do
+
+Port `a25.c` over to using the `utilities.h` file
 
 
 ### Conclusion
