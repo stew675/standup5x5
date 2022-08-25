@@ -339,6 +339,35 @@ by_frequency_lo(const void *a, const void *b)
 	return ((struct frequency *)a)->f - ((struct frequency *)b)->f;
 } // by_frequency_lo
 
+int
+by_frequency_hi(const void *a, const void *b)
+{
+	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
+} // by_frequency_hi
+
+void
+rescan_frequencies(int start, register uint32_t *set)
+{
+	register uint32_t key;
+	struct frequency *map[26];
+
+	for (int i = start; i < 26; i++)
+		map[__builtin_ctz(frq[i].m)] = frq + i;
+
+	// Reset the frequencies we haven't processed yet
+	for (int i = start; i < 26; i++)
+		frq[i].f = 0;
+
+	while ((key = *set++)) {
+		while (key) {
+			int i = __builtin_ctz(key);
+			map[i]->f++;
+			key ^= ((uint32_t)1 << i);
+		}
+	}
+
+	qsort(frq + start, 26 - start, sizeof(*frq), by_frequency_hi);
+} // rescan_frequencies
 
 // ********************* MAIN SETUP AND OUTPUT ********************
 

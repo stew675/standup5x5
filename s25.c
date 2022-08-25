@@ -94,8 +94,12 @@ setup_frequency_sets()
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask = f->m, *ks, key;
+		register uint32_t mask, *ks, key;
 
+		if (i == 7)
+			rescan_frequencies(i, kp);
+
+		mask = f->m;
 		f->s = kp;
 		for (ks = kp; (key = *ks); ks++) {
 			if (key & mask) {

@@ -77,7 +77,6 @@ static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(4096)));
 
 #include "utilities.h"
 
-
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning
 // the remainder and so on until all keys have been assigned to sets
@@ -93,8 +92,12 @@ setup_frequency_sets()
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask = f->m, *ks, key;
+		register uint32_t mask, *ks, key;
 
+		if (i == 7)
+			rescan_frequencies(i, kp);
+
+		mask = f->m;
 		f->s = kp;
 		for (ks = kp; (key = *ks); ks++) {
 			if (key & mask) {
