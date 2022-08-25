@@ -77,9 +77,8 @@ hash_insert(register const char *wd, register const char *wp)
 	register uint32_t col = 0;
 	do {
 		// Check if duplicate key
-		if (h->key == key) {
+		if (h->key == key)
 			return 0;
-		}
 
 		// Check if we can insert at this position
 		if (h->key == 0)
@@ -108,11 +107,11 @@ hash_insert(register const char *wd, register const char *wp)
 const char *
 hash_lookup(register uint32_t key, register const char *wp)
 {
-	key &= 0x3ffffff;	// Ensure bitmap is clean
+	key &= 0x3ffffff;	// Sanitise the bitmap key
 
 	// Reject invalid keys
 	if (__builtin_popcount(key) != 5)
-		return 0;
+		return NULL;
 
 	register struct wordhash *h = hashmap + key_hash(key);
 	register struct wordhash *e = hashmap + HASHSZ;

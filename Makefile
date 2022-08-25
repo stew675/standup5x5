@@ -7,8 +7,8 @@
 
 all: a25 s25 v25 525
 
-#CC=clang-12
-CC=gcc
+CC=clang-12
+#CC=gcc
 
 CFLAGS=-O3 -march=native -Wall
 LIBS=-lpthread
@@ -24,3 +24,6 @@ v25: v25.c utilities.h Makefile
 
 525: 525.c utilities.h Makefile
 	$(CC) $(CFLAGS) -o $@ 525.c $(LIBS)
+
+check:
+	/bin/sh ./check.sh
