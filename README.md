@@ -37,9 +37,9 @@ based laptop. On my AMD system, the following (internal) times are seen:
 
 **a25** takes around 19ms to complete, using 14 threads
 
-**s25** takes around 3.5ms to complete using 14 threads
+**s25** takes around 3.1ms to complete using 14 threads
 
-**v25** takes around 1.9ms to complete using 14 threads
+**v25** takes around 1.8ms to complete using 14 threads
 
 **525** won't run on my AMD system.  On my Intel laptop it takes 2.8ms to complete
 using 8 threads.  I estimate that on a full desktop runtimes of 1.6ms should be achievable
@@ -167,6 +167,16 @@ I then had the main thread process the word array that was being built by the
 reader threads to build the hash table concurrently.  Doing all this together
 managed to get file load and hash table build times to under 0.8ms on my AMD
 system.
+
+
+### Frequency Rescanning
+
+About mid-way through the frequency set build, we rescan the frequencies and
+re-order the remaining sets from most-frequent to least.  The works because
+the bulk of the benefit from the least to most frequent ordering has already
+been gained by this stage, and reducing the length of the combinatorial "tail"
+has an amortizing effect of more than making up for the increased set sizes
+mid-algorithm
 
 
 ### Clean-Up
