@@ -44,7 +44,7 @@ based laptop. On my AMD system, the following (internal) times are seen:
 **525** won't run on my AMD system.  On my Intel laptop it takes 2.8ms to complete
 using 8 threads.  I estimate that on a full desktop runtimes of 1.6ms should be achievable
 
-All algorithms uses a bit-wise representation of the words for efficiency of comparing
+All algorithms use a bit-wise representation of the words for efficiency of comparing
 
 All algorithms also implement lockless thread co-ordination for speed.
 
