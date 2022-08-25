@@ -128,10 +128,10 @@ words-alpha-five.txt or NYT files as input.
 
 ### v25
 
-`v25.c` is just `s25.c` but with AVX2 instructions add for processing the key
-sets.  The use of AVX-2 saw the main algorithm loop be sped up by almost 3x.
-This is my first time ever playing around with AVX instructions, so it was a
-fun learning experience.
+`v25.c` is just `s25.c` but with AVX2 instructions added for processing the
+key sets.  The use of AVX-2 saw the main algorithm loop be sped up by almost
+3x.  This is my first time ever playing around with AVX instructions, so it
+was a fun learning experience.
 
 
 ### 525
