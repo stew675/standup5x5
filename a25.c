@@ -1,9 +1,11 @@
-// A solution to the Stand Up Maths Unique 5x5 word problem
+// A solution to the Parker 5x5 Unique Word Problem
 //
 // Author: Stew Forster (stew675@gmail.com)	Date: Aug 2022
+//
 
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/sysinfo.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -14,200 +16,67 @@
 #include <pthread.h>
 #include <assert.h>
 #include <stdatomic.h>
+#include <immintrin.h>
 
-#define	HASHSZ	75011		// Prime number of 75K hash entries
+#define	MAX_SOLUTIONS	8192
+#define	MAX_WORDS	8192
+#define	MAX_THREADS	  64
+#define	MAX_READERS	  11	// Virtual systems don't like too many readers
+#define	READ_CHUNK	8192
+//#define	HASHSZ		69001	// Also a good value
+#define	HASHSZ		39009
 
-#define MAX_THREADS	64
+static const char	*solution_filename = "solutions.txt";
 
-static int nthreads = 0;
+// Worker thread state
+static struct worker {
+	pthread_t tid;
+	char *start;
+	char *end;
+} workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
-#define handle_error(msg) do { perror(msg); exit(EXIT_FAILURE); } while (0)
-
-// A very simple 5 letter word copy
-static inline void
-wcp(register char *a, register const char *b)
-{
-	*a++ = *b++; *a++ = *b++; *a++ = *b++; *a++ = *b++; *a = *b;
-} // wcp
-
-
-// A very simple for-purpose hash map implementation
-struct wh {
+// Word Hash Entries
+static uint32_t	hash_collisions	__attribute__ ((aligned(64))) = 0;
+static struct wordhash {
 	uint32_t	key;
-	char		wd[6];
-};
+	uint32_t	pos;
+} hashmap[HASHSZ] __attribute__ ((aligned(64)));
 
-struct wh hashmap[HASHSZ] = {0};
-uint32_t collisions = 0;
+// Character frequency recording
+static struct frequency {
+	uint32_t  *s;		// Pointer to set
+	uint32_t  *e;		// Pointer to end of set
+	uint32_t   m;		// Mask (1 << (c - 'a'))
+	int32_t    f;		// Frequency
+	int32_t    l;		// Length of set
+	atomic_int pos;		// Position within a set
+} frq[26] __attribute__ ((aligned(64)));
 
-#define get_hash(x)	(((x) * 3) % HASHSZ)
-int
-hash_insert(uint32_t key, const char *wd)
-{
-	key &= 0x3ffffff;
+static int	write_metrics = 0;
+static int	nthreads = 0;
+static int	nkeys = 0;
 
-	if (key == 0)
-		return 0;
+// Keep frequently modified atomic variables on their own CPU cache line
+atomic_int	num_words	__attribute__ ((aligned(64))) = 0;
+atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
+atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
+atomic_int	readers_done = 0;
+atomic_int	solvers_synced = 0;
+atomic_int	solvers_done = 0;
 
-	register struct wh *h = hashmap + get_hash(key), *e = hashmap + HASHSZ;
-	register int32_t col = 0;
-	do {
-		// Check if duplicate key
-		if (h->key == key)
-			return 0;
+// Allow for up to 3.2x the number of unique non-anagram words
+static char	words[MAX_WORDS * 16] __attribute__ ((aligned(64)));
 
-		// Check if we can insert at this position
-		if (h->key == 0)
-			break;
+// We build the solutions directly as a character array to write out when done
+static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
-		col++;
-		h++;
-
-		if (col == HASHSZ)
-			assert(col < HASHSZ);
-
-		if (h == e)
-			h -= HASHSZ;
-	} while (1);
-
-	collisions += col;
-
-	// Now insert at hash location
-	h->key = key;
-	wcp(h->wd, wd);
-
-	return 1;
-} // hash_insert
+// We add 1024 here to MAX_WORDS to give us extra space to perform vector
+// alignments for the AVX functions.  At the very least the keys array must
+// be 32-byte aligned, but we align it to a typical system page boundary
+static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(4096)));
 
 
-char *
-hash_lookup(uint32_t key)
-{
-	key &= 0x3ffffff;
-
-	if (key == 0)
-		return NULL;
-
-	register struct wh *h = hashmap + get_hash(key), *e = hashmap + HASHSZ;
-	register int32_t col = 0;
-	do {
-		// Check the not-in-hash scenario
-		if (h->key == 0)
-			return NULL;
-
-		// Check if entry matches the key
-		if (h->key == key)
-			break;
-
-		col++;
-		h++;
-
-		if (col == HASHSZ)
-			assert(col < HASHSZ);
-
-		if (h == e)
-			h -= HASHSZ;
-	} while (1);
-
-	collisions += col;
-	return h->wd;
-} // hash_lookup
-
-
-static inline uint32_t
-calc_key(register const char *wd)
-{
-	register uint32_t key = 0;
-	key  = (1 << (*wd++ - 'a'));
-	key |= (1 << (*wd++ - 'a'));
-	key |= (1 << (*wd++ - 'a'));
-	key |= (1 << (*wd++ - 'a'));
-	key |= (1 << (*wd - 'a'));
-
-	return key;
-} // calc_key
-
-
-static inline uint32_t
-add_word_to_set(register const char *wd)
-{
-	// Reject word if it has duplicate characters
-	for (int p = 0; p < 4; p++)
-		for (int r = p + 1; r < 5; r++)
-			if (wd[p] == wd[r])
-				return 0;
-
-	uint32_t key = calc_key(wd);
-
-	// Returns 0 (false) if key already exists. Since
-	// the key is a bitmap and order independent this
-	// has the effect of quickly eliminating anagrams
-	if (hash_insert(key, wd))
-		return key;
-
-	return 0;
-} // add_word_to_set
-
-
-uint32_t zset[4096] = {0};
-uint32_t dset[4096] = {0};
-uint32_t nkeys = 0;
-
-void
-read_words(char *path)
-{
-	register uint32_t *d = dset, *z = zset, nk = 0;
-
-	struct stat statbuf;
-
-	int fd = open(path, O_RDONLY);
-	if (fd < 0)
-		handle_error("open");
-	if (fstat(fd, &statbuf) < 0)
-		handle_error("fstat");
-
-	int len = statbuf.st_size;
-
-	char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
-	if (addr == MAP_FAILED)
-		handle_error("mmap");
-
-	// Safe to close file now.  mapping remains until munmap() is called
-	close(fd);
-
-	for (register char *s = addr, *e = addr + len; s < e; s++) {
-		register char *w = s, c;
-
-		c = *s;   if (c < 'a' || c > 'z') continue;
-		c = *++s; if (c < 'a' || c > 'z') continue;
-		c = *++s; if (c < 'a' || c > 'z') continue;
-		c = *++s; if (c < 'a' || c > 'z') continue;
-		c = *++s; if (c < 'a' || c > 'z') continue;
-		c = *++s;
-
-		if (c < 'a' || c > 'z') {
-			// We have a 5 letter word
-			uint32_t key = add_word_to_set(w);
-
-			if (key) {
-				if (key & 0x1) {	// a
-					*z++ = key;
-				} else {
-					*d++ = key;
-				}
-				nk++;
-			}
-		} else {
-			// Advance to next non [a-z] character
-			for (c = *++s; c >= 'a' && c <= 'z'; c = *++s);
-		}
-	}
-
-	// Release our file mapping
-	munmap(addr, len);
-
-	nkeys = nk;
-} // read_words
+#include "utilities.h"
 
 
 #if 0
@@ -235,9 +104,75 @@ combo(int n, int r, int d)
 #endif
 
 
+uint32_t *dset = NULL, *zset = NULL;
+
+void
+setup_frequency_sets()
+{
+	register struct frequency *f = &frq[0];
+	register uint32_t *kp = keys, mask, *ks, key;
+
+	qsort(f, 26, sizeof(*f), by_frequency_hi);
+
+	mask = f->m;
+	f->s = kp;
+	for (ks = kp; (key = *ks); ks++) {
+		if (key & mask) {
+			*ks = *kp;
+			*kp++ = key;
+		}
+	}
+	f->e = kp;
+	f->l = kp - f->s;
+
+	// 0-terminate this frequency key set
+	*ks++ = *kp;
+	*kp++ = 0;
+
+	// Ensure key set is 0 terminated for next loop
+	*ks = 0;
+
+	frq[1].s = kp;
+	frq[1].e = ks;
+	frq[1].l = ks - kp;
+
+	zset = keys;
+	dset = kp;
+} // setup_frequency_sets
+
+
+// ********************* SOLUTION FUNCTIONS ********************
+static inline void
+add_solution_real(uint32_t *solution)
+{
+	register int i, pos = atomic_fetch_add(&num_sol, 1);
+	register char *so = solutions + pos * 30;
+	register const char *wd;
+
+	for (i = 1; i < 6; i++) {
+		wd = hash_lookup(solution[i], words);
+		assert(wd != NULL);
+
+		*so++ = *wd++; *so++ = *wd++; *so++ = *wd++; *so++ = *wd++;
+		*so++ = *wd; *so++ = (i < 5) ? '\t' : '\n';
+	}
+} // add_solution_real
+
+static inline void
+add_solution(uint32_t key0, uint32_t key1, uint32_t key2, uint32_t key3, uint32_t key4)
+{
+	uint32_t solution[6];
+
+	solution[1] = key0;
+	solution[2] = key1;
+	solution[3] = key2;
+	solution[4] = key3;
+	solution[5] = key4;
+	add_solution_real(solution);
+} // add_solution
+
+ 
 #define FOUR_READY  ((uint32_t)0xEAD1EAD1)
-atomic_int num_sol = 0;
-uint32_t   solutions[2048][5];
 
 atomic_int num_four = 0;
 uint32_t   fourset[6291456] = {0};
@@ -252,13 +187,6 @@ add_fourset(uint32_t key0, uint32_t key1, uint32_t key2, uint32_t key3)
 	*f = FOUR_READY;
 } // add_solution
 
-static inline void
-add_solution(uint32_t key0, uint32_t key1, uint32_t key2, uint32_t key3, uint32_t key4)
-{
-	register uint32_t *s = solutions[atomic_fetch_add(&num_sol, 1)];
-
-	*s++ = key0; *s++ = key1; *s++ = key2; *s++ = key3; *s = key4;
-} // add_solution
 
 // s0-s3 = starts of the scanbuf
 // s0, s1 remain fixed
@@ -298,14 +226,11 @@ gen_four_set(register uint32_t *s0, register uint32_t *s1, register uint32_t key
 } // gen_four_set
 
 // Top level driver
-pthread_t	tids[MAX_THREADS];
 volatile atomic_int	four_pos = 0;
 volatile atomic_size_t	spins = 0;
-atomic_int	driver_pos = 0;
-atomic_int	threads_synced = 0;
-atomic_int	threads_done = 0;
+volatile atomic_int	driver_pos = 0;
 
-// A gormless attenpt at a lockless way to process fourset
+// A gormless attempt at a lockless way to process fourset
 uint32_t
 apply_four()
 {
@@ -313,7 +238,7 @@ apply_four()
 
 	do {
 		while (four_pos >= num_four) {
-			if (threads_synced >= nthreads)
+			if (solvers_synced >= (nthreads - 1))
 				return four_pos;
 			atomic_fetch_add(&spins, 1);
 		}
@@ -324,7 +249,7 @@ apply_four()
 
 		// We over-shot.  Check if all threads are done
 		while (pos >= num_four) {
-			if (threads_synced >= nthreads)
+			if (solvers_synced >= (nthreads - 1))
 				return pos;
 			atomic_fetch_add(&spins, 1);
 		}
@@ -344,14 +269,13 @@ apply_four()
 void *
 driver(void *arg)
 {
+	struct worker *work = (struct worker *)arg;
 	uint32_t scanbuf[4096];
 	register uint32_t *dp = dset, *sp = scanbuf;
 
-	if (arg) {
-		pthread_t tid = *(pthread_t *)arg;
-		if (pthread_detach(tid))
+	if (work->tid)
+		if (pthread_detach(work->tid))
 			perror("pthread_detach");
-	}
 
 	for (;;) {
 		register uint32_t *d = dp + atomic_fetch_add(&driver_pos, 1);
@@ -372,93 +296,124 @@ driver(void *arg)
 	}
 
 	if (arg) {
-		atomic_fetch_add(&threads_synced, 1);
+		atomic_fetch_add(&solvers_synced, 1);
 	}
 
 	apply_four();
 
 	if (arg) {
-		atomic_fetch_add(&threads_done, 1);
+		atomic_fetch_add(&solvers_done, 1);
 	}
 	return NULL;
 } // driver
 
 
 void
-solve(int threads)
+solve()
 {
-	if (threads > MAX_THREADS)
-		threads = MAX_THREADS;
-	if (threads < 0)
-		threads = 0;
+	for (int i = 1; i < nthreads; i++)
+		pthread_create(&workers[i].tid, NULL, driver, workers + i);
 
-	if (threads == 0) {
-		driver(NULL);
-		return;
-	}
-
-	nthreads = threads;
-	for (uintptr_t i = 0; i < nthreads; i++) {
-		void *arg = (void *)(tids + i);
-		pthread_create(tids + i, NULL, driver, arg);
+	// We have to solve ourselves if we're the only thread
+	if (nthreads < 2) {
+		workers[0].tid = 0;
+		driver(workers);
 	}
 
 	// Process fourset while waiting
 	apply_four();
 
-	while(threads_done < nthreads)
+	while(solvers_done < (nthreads - 1))
 		usleep(1);
 } // solve
-
-
-void
-emit_solutions()
-{
-	FILE *fp = fopen("solutions.txt", "w");
-	if (fp == NULL)
-		return;
-
-	fprintf(fp, "SOLUTIONS:\n\n");
-	for (int i = 0; i < num_sol; i++) {
-		fprintf(fp, "%.5s ", hash_lookup(solutions[i][0]));
-		fprintf(fp, "%.5s ", hash_lookup(solutions[i][1]));
-		fprintf(fp, "%.5s ", hash_lookup(solutions[i][2]));
-		fprintf(fp, "%.5s ", hash_lookup(solutions[i][3]));
-		fprintf(fp, "%.5s\n", hash_lookup(solutions[i][4]));
-	}
-	fprintf(fp, "\n");
-
-	fclose(fp);
-} // emit_solutions
 
 
 int
 main(int argc, char *argv[])
 {
-	struct timespec ts[1], te[1];
-	int64_t time_taken = 1000000000LL;
+	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
+	char file[256];
 
-	read_words("words_alpha.txt");
-//	read_words("nyt_wordle.txt");
+	// Copy in a default file-name
+	strcpy(file, "words_alpha.txt");
 
-	clock_gettime(CLOCK_MONOTONIC, ts);
-	solve(14);
-	clock_gettime(CLOCK_MONOTONIC, te);
+	nthreads = get_nthreads();
 
-	time_taken *= (te->tv_sec - ts->tv_sec);
-	time_taken += (te->tv_nsec - ts->tv_nsec);
+	if (argc > 1) {
+		for (int i = 1; i < argc; i++) {
+			if (!strncmp(argv[i], "-v", 2)) {
+				write_metrics = 1;
+				continue;
+			}
+
+			if (!strncmp(argv[i], "-f", 2)) {
+				if ((i + 1) < argc) {
+					strncpy(file, argv[i+1], 255);
+					file[255] = '\0';
+					i++;
+					continue;
+				}
+			}
+
+			if (!strncmp(argv[i], "-t", 2)) {
+				if ((i + 1) < argc) {
+					nthreads = atoi(argv[i+1]);
+					i++;
+					if (nthreads < 0)
+						nthreads = 1;
+					if (nthreads > MAX_THREADS)
+						nthreads = MAX_THREADS;
+					continue;
+				}
+			}
+
+			printf("Usage: %s [-v] [-t num_threads] [-f filename]\n", argv[0]);
+			exit(1);
+		}
+	}
+
+	if (nthreads <= 0)
+		nthreads = 1;
+	if (nthreads > MAX_THREADS)
+		nthreads = MAX_THREADS;
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
+
+	read_words(file);
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
+
+	setup_frequency_sets();
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
+
+	solve();
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t4);
 
 	emit_solutions();
 
-	printf("Num Solutions = %d\n", num_sol);
-	printf("Num Four Sets = %d\n", num_four);
-	printf("Num Unique Word = %d\n", nkeys);
-	printf("Hash Collisions = %u\n", collisions);
-	printf("Number of threads = %d\n", nthreads);
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t5);
 
-	printf("Time Taken = %ld.%06lus\n", time_taken / 1000000000, (time_taken % 1000000000) / 1000);
-	if (nthreads)
-		printf("Number of Thread Contention Busy Spins = %lu\n", spins);
+	if (!write_metrics)
+		exit(0);
+
+	printf("Num Unique Words    = %8d\n", nkeys);
+	printf("Hash Collisions     = %8u\n", hash_collisions);
+	printf("Number of threads   = %8d\n", nthreads);
+	printf("Number of Four Sets = %8d\n", num_four);
+	printf("Zero Set Size       = %8d\n", frq[0].l);
+	printf("Driver Set Size     = %8d\n", frq[1].l);
+
+	printf("\nNUM SOLUTIONS = %d\n", num_sol);
+
+	printf("\nTIMES TAKEN :\n");
+	print_time_taken("Total", t1, t5);
+	printf("\n");
+	print_time_taken("File Load", t1, t2);
+	print_time_taken("Frequency Set Build", t2, t3);
+	print_time_taken("Main Algorithm", t3, t4);
+	print_time_taken("Emit Results", t4, t5);
 
 	exit(0);
 } // main

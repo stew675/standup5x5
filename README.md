@@ -7,23 +7,24 @@ See: https://www.youtube.com/watch?v=_-AfhLQfb6w
 
 ### Building and Running
 
-Just run make and execute `./a25`, `./s25 -v`, `./v25 -v` or `./525 -v`
+Just run make and execute `./a25 -v`, `./s25 -v`, `./v25 -v` or `./525 -v`
+
+NB: Omit the **-v** option if planning to use the `time` shell call
 
 I've set the default compiler to `clang-12` in the Makefile, as this produces
 the fastest executables in my testing, but edit the Makefile and switch to
 `gcc` if that's what you have
 
-s25, v25, and 525 all support the **-v** option which will emit run-time metrics
-Omit the **-v** option if measuring with the `time` shell call, however since
-it typically takes about 1ms for an executable to get up and running, the times
-reported by `time` will be slightly higher than the internally measured times.
+a25, s25, v25, and 525 all support the **-v** option which will emit run-time metrics
+If measuring with the `time` shell call, be aware that it typically takes about 1ms
+for an executable to get up and running, the times reported by `time` will be slightly
+higher than the internally measured times.  Also, the time taken to print the metrics
+can become a non-neglible factor at these low execution times.
 
 For speed, all solutions are written to a file named `solutions.txt` in the
 current directory
 
-Excluding `a25`, the full arguments are:
-
-`[s25|v25|525] [-v] [-t num_threads] [-f word-file]`
+`[a25|s25|v25|525] [-v] [-t num_threads] [-f word-file]`
 
 - **-v** : Normally no console output is produced.  `-v` allows the executable to emit metrics
 - **-t** : Allows the user to specify the number of threads to use.  By default the executables will use 1 or 2 less threads than there are CPUs on the system
@@ -35,7 +36,7 @@ Excluding `a25`, the full arguments are:
 My development systems are a desktop AMD 5950x based PC, and an Intel i7-1165G7
 based laptop. On my AMD system, the following (internal) times are seen:
 
-**a25** takes around 19ms to complete, using 14 threads
+**a25** takes around 19ms to complete, using 15 threads
 
 **s25** takes around 3.1ms to complete using 14 threads
 
@@ -184,11 +185,6 @@ mid-algorithm
 I moved all the file reading and other utility functions to a common `utilities.h`
 file that is included by the main algorithms.  In this way, any future tweaks
 should be consistent across all implementations
-
-
-### To Do
-
-Port `a25.c` over to using the `utilities.h` file
 
 
 ### Conclusion
