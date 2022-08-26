@@ -146,9 +146,8 @@ hash_lookup(register uint32_t key, register const char *wp)
 void
 find_words(register char *s, register char *e)
 {
-	register char *w, *wp = words, a = 'a';
+	register char *w, *wp = words, a = 'a', z = 'z';
 
-	// process_words() deals with characters > 'z'
 	while (s < e) {
 		w = s;
 		if (*s++ < a) continue;
@@ -157,14 +156,24 @@ find_words(register char *s, register char *e)
 		if (*s++ < a) continue;
 		if (*s++ < a) continue;
 
-		if (*s++ < a) {
+		// Rescanning twice is fast because the < a above
+		// eliminates almost everything not of interest,
+		// and the word will be in the L1 cache already
+		if (*s < a || *s > z) {
+			s = w;
+			if (*s++ > z) continue;
+			if (*s++ > z) continue;
+			if (*s++ > z) continue;
+			if (*s++ > z) continue;
+			if (*s++ > z) continue;
+
 			register char *to = wp + (5 * atomic_fetch_add(&num_words, 1));
 
 			*to++ = *w++; *to++ = *w++; *to++ = *w++; *to++ = *w++; *to = *w;
-		} else {
-			// Just quickly find the next line
-			while (*s++ != '\n');
 		}
+
+		// Just quickly find the next line
+		while (*s++ != '\n');
 	}
 } // find_words
 
@@ -209,7 +218,7 @@ void
 process_words(int nr)
 {
 	register uint32_t spins = 0, *k = keys;
-	register char *wp = words, *w, *s, z = 'z';
+	register char *wp = words, *w, *s;
 	uint32_t freqs['z' + 1] = {0};
 
 	// We do these initialisions here after the reader threads start
@@ -234,13 +243,6 @@ process_words(int nr)
 		// This can only become true after all readers are done
 		if (pos > num_words)
 			break;
-
-		// Here's where we eliminate words with characters > 'z'
-		if (*s++ > z) continue;
-		if (*s++ > z) continue;
-		if (*s++ > z) continue;
-		if (*s++ > z) continue;
-		if (*s > z) continue;
 
 		if ((key = hash_insert(w, wp)) == 0)
 			continue;
