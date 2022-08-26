@@ -161,9 +161,9 @@ find_solutions(register int depth, register int setnum, register uint32_t mask,
 		register int skipped, register uint32_t *solution, register uint32_t key)
 {
 	solution[depth] = key;
-	mask |= key;
 	if (depth == 5)
 		return add_solution(solution);
+	mask |= key;
 
 	for (register int e = min_search_depth + depth; setnum < e; setnum++)
 		if (!(mask & frq[setnum].m)) {
