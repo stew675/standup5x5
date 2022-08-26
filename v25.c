@@ -177,7 +177,7 @@ find_solutions(register int depth, register int setnum, register uint32_t mask,
 			while (vresmask) {
 				register int32_t i = __builtin_ctz(vresmask);
 
-				find_solutions(depth + 1, setnum + 1, mask | key, skipped, solution, set[i>>2]);
+				find_solutions(depth + 1, setnum + 1, mask, skipped, solution, set[i>>2]);
 				vresmask ^= (0xFU << i);
 			}
 		}
