@@ -16,7 +16,6 @@
 #include <pthread.h>
 #include <assert.h>
 #include <stdatomic.h>
-#include <immintrin.h>
 
 #define	MAX_SOLUTIONS	8192
 #define	MAX_WORDS	8192
