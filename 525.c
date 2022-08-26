@@ -20,6 +20,8 @@
 
 #ifdef __AVX512F__
 
+#define ctz(x)		__builtin_ctz(x)	// Count Trailing Zeros
+
 #define	MAX_SOLUTIONS	8192
 #define	MAX_WORDS	8192
 #define	MAX_THREADS	  64
@@ -147,15 +149,16 @@ add_solution(register uint32_t *solution)
 	}
 } // add_solution
 
-#define ctz(x)		__builtin_ctz(x)
-#define vzero		_mm512_setzero_si512()
-#define vmask(x)	_mm512_set1_epi32(x)
-#define vkeys(y) 	_mm512_load_si512((__m512i *)y)
-#define vand(x, y)	_mm512_and_si512(vmask(x), vkeys(y))
-#define vscan(x, y)	_mm512_cmpeq_epi32_mask(vand(x, y), vzero)
+static inline uint16_t
+vscan(register uint32_t mask, register uint32_t *set)
+{
+	__m512i vmask = _mm512_set1_epi32(mask);
+	__m512i vkeys = _mm512_load_si512((__m256i *)set);
+	return (uint16_t) _mm512_cmpeq_epi32_mask(_mm512_and_si512(vmask, vkeys), _mm512_setzero_si512());
+} // vscan
 
-// find_solutions() which is the busiest loop is kept
-// as small and tight as possible for the most speed
+// find_solutions() which is the busiest loop is thereby
+// kept as small and tight as possible for the most speed
 void
 find_solutions(register int depth, register int setnum, register uint32_t mask,
 		register int skipped, register uint32_t *solution, register uint32_t key)
@@ -165,14 +168,25 @@ find_solutions(register int depth, register int setnum, register uint32_t mask,
 		return add_solution(solution);
 	mask |= key;
 
-	for (register int e = min_search_depth + depth; setnum < e; setnum++)
-		if (!(mask & frq[setnum].m)) {
-			for (register uint32_t *set = frq[setnum].s, *end = frq[setnum].e; set < end; set += 16)
-				for (register uint16_t vresmask = vscan(mask, set); vresmask; vresmask &= (vresmask - 1))
-					find_solutions(depth + 1, setnum + 1, mask, skipped, solution, set[ctz(vresmask)]);
-			if (skipped) return;
-			skipped = 1;
+	// Keep these loops tight!
+	register int e = min_search_depth + depth;
+	register uint32_t *set, *end;
+	for (; setnum < e; setnum++) {
+		if (mask & frq[setnum].m)
+			continue;
+		set = frq[setnum].s;
+		for (end = frq[setnum].e; set < end; set += 16) {
+			register uint16_t vresmask = vscan(mask, set);
+			while (vresmask) {
+				register int i = ctz(vresmask);
+				find_solutions(depth + 1, setnum + 1, mask, skipped, solution, set[i]);
+				vresmask ^= ((uint16_t)1 << i);
+			}
 		}
+		if (skipped)
+			break;
+		skipped = 1;
+	}
 } // find_solutions
 
 // Top level solver
@@ -298,7 +312,7 @@ main(int argc, char *argv[])
 
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
-		char c = 'a' + __builtin_ctz(frq[i].m);
+		char c = 'a' + ctz(frq[i].m);
 		printf("%c set_length = %d\n", c, frq[i].l);
 	}
 	printf("\n\n");
