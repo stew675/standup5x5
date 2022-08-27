@@ -26,9 +26,9 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	pthread_t  tid;
-	char      *start;
-	char      *end;
+	pthread_t tid;
+	char     *start;
+	char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
 // Character frequency recording
@@ -42,7 +42,7 @@ static struct frequency {
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
-volatile atomic_int	num_words	__attribute__ ((aligned(64))) = 0;
+volatile atomic_int num_words	__attribute__ ((aligned(64))) = 0;
 atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
 atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done = 0;
@@ -53,7 +53,7 @@ static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
-static uint32_t	hash_collisions;
+static uint32_t hash_collisions = 0;
 
 // We build the solutions directly as a character array to write out when done
 static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));

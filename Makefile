@@ -17,7 +17,7 @@ a25: a25.c utilities.h Makefile
 	$(CC) $(CFLAGS) -o $@ a25.c $(LIBS)
 
 s25: s25.c utilities.h Makefile
-	$(CC) -fno-inline $(CFLAGS) -o $@ s25.c $(LIBS)
+	$(CC) $(CFLAGS) -o $@ s25.c $(LIBS)
 
 v25: v25.c utilities.h Makefile
 	$(CC) $(CFLAGS) -o $@ v25.c $(LIBS)

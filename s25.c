@@ -26,8 +26,8 @@ static const char	*solution_filename = "solutions.txt";
 // Worker thread state
 static struct worker {
 	pthread_t tid;
-	char *start;
-	char *end;
+	char     *start;
+	char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
 // Character frequency recording
