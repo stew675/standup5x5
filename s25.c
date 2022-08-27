@@ -20,10 +20,6 @@
 #define	MAX_SOLUTIONS	8192
 #define	MAX_WORDS	8192
 #define	MAX_THREADS	  64
-#define	MAX_READERS	  11	// Virtual systems don't like too many readers
-#define	READ_CHUNK	8192
-//#define	HASHSZ		69001	// Also a good value
-#define	HASHSZ		39009
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -33,13 +29,6 @@ static struct worker {
 	char *start;
 	char *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
-
-// Word Hash Entries
-static uint32_t	hash_collisions	__attribute__ ((aligned(64))) = 0;
-static struct wordhash {
-	uint32_t	key;
-	uint32_t	pos;
-} hashmap[HASHSZ] __attribute__ ((aligned(64)));
 
 // Character frequency recording
 static struct frequency {
@@ -55,6 +44,7 @@ static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
+static uint32_t hash_collisions = 0;
 
 // Keep frequently modified atomic variables on their own CPU cache line
 atomic_int	num_words	__attribute__ ((aligned(64))) = 0;
@@ -63,20 +53,10 @@ atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done = 0;
 atomic_int	solvers_done = 0;
 
-// Allow for up to 3.2x the number of unique non-anagram words
-static char	words[MAX_WORDS * 16] __attribute__ ((aligned(64)));
-
 // We build the solutions directly as a character array to write out when done
 static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
-// We add 1024 here to MAX_WORDS to give us extra space to perform vector
-// alignments for the AVX functions.  At the very least the keys array must
-// be 32-byte aligned, but we align it to a typical system page boundary
-static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(4096)));
-
-
 #include "utilities.h"
-
 
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning
