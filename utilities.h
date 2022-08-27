@@ -154,7 +154,7 @@ hash_lookup(register uint32_t key, register const char *wp)
 	} while (1);
 
 	hash_collisions += col;
-	return wp + h->pos;
+	return wp + (h->pos * 5);
 } // hash_lookup
 #undef key_hash
 
@@ -190,7 +190,12 @@ find_words(register char *s, register char *e)
 				register int pos = atomic_fetch_add(&num_words, 1);
 				register char *to = wp + (5 * pos);
 
-				memcpy(to, w, 5);
+//				memcpy(to, w, 5);
+				*to++ = *w++;
+				*to++ = *w++;
+				*to++ = *w++;
+				*to++ = *w++;
+				*to++ = *w++;
 				wordkeys[pos] = key;
 			}
 		}
