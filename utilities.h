@@ -1,3 +1,32 @@
+#define	HASHSZ            39009
+#define READ_CHUNK         8192
+#define MAX_READERS          14    // Virtual systems don't like too many readers
+
+// Word Hash Entries
+static struct wordhash {
+	uint32_t	key;
+	uint32_t	pos;
+} hashmap[HASHSZ] __attribute__ ((aligned(64)));
+
+// Allow for up to 3x the number of unique non-anagram words
+static char	words[MAX_WORDS * 15] __attribute__ ((aligned(64)));
+static uint32_t	wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
+
+// We add 1024 here to MAX_WORDS to give us extra space to perform vector
+// alignments for the AVX functions.  At the very least the keys array must
+// be 32-byte aligned, but we align it to a typical system page boundary
+static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
+
+void
+print_time_taken(char *label, struct timespec *ts, struct timespec *te)
+{
+	int64_t time_taken = 1000000000LL;	// Number of ns in 1s
+	time_taken *= (te->tv_sec - ts->tv_sec);
+	time_taken += (te->tv_nsec - ts->tv_nsec);
+
+	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000, (time_taken % 1000000000) / 1000);
+} // print_time_taken
+ 
 //********************* INIT FUNCTIONS **********************
 
 static void
@@ -53,8 +82,7 @@ calc_key(register const char *wd)
 	key |= (one << (*wd++ - a));
 	key |= (one << (*wd   - a));
 
-	// Eliminate any illegal characters
-	return (key & 0x3ffffff);
+	return key;
 } // calc_key
 
 
@@ -64,14 +92,8 @@ calc_key(register const char *wd)
 // lookup words given the key representation of that word
 #define key_hash(x)	((((size_t)x) << 26) % HASHSZ)
 uint32_t
-hash_insert(register const char *wd, register const char *wp)
+hash_insert(register const char *wd, register const char *wp, register const uint32_t key)
 {
-	register uint32_t key = calc_key(wd);
-
-	// Reject words without 5 unique [a..z] characters
-	if (__builtin_popcount(key) != 5)
-		return 0;
-
 	register struct wordhash *h = hashmap + key_hash(key);
 	register struct wordhash *e = hashmap + HASHSZ;
 	register uint32_t col = 0;
@@ -107,12 +129,6 @@ hash_insert(register const char *wd, register const char *wp)
 const char *
 hash_lookup(register uint32_t key, register const char *wp)
 {
-	key &= 0x3ffffff;	// Sanitise the bitmap key
-
-	// Reject invalid keys
-	if (__builtin_popcount(key) != 5)
-		return NULL;
-
 	register struct wordhash *h = hashmap + key_hash(key);
 	register struct wordhash *e = hashmap + HASHSZ;
 	register uint32_t col = 0;
@@ -167,9 +183,15 @@ find_words(register char *s, register char *e)
 			if (*s++ > z) continue;
 			if (*s++ > z) continue;
 
-			register char *to = wp + (5 * atomic_fetch_add(&num_words, 1));
+			// Reject words without 5 unique [a..z] characters
+			register uint32_t key = calc_key(w);
+			if (__builtin_popcount(key) == 5) {
+				register int pos = atomic_fetch_add(&num_words, 1);
+				register char *to = wp + (5 * pos);
 
-			*to++ = *w++; *to++ = *w++; *to++ = *w++; *to++ = *w++; *to = *w;
+				memcpy(to, w, 5);
+				wordkeys[pos] = key;
+			}
 		}
 
 		// Just quickly find the next line
@@ -177,10 +199,16 @@ find_words(register char *s, register char *e)
 	}
 } // find_words
 
+struct timespec trs[1] = {0};
+struct timespec tre[1] = {0};
+
 void *
 file_reader(void *arg)
 {
 	struct worker *work = (struct worker *)arg;
+
+	if (trs->tv_sec == 0)
+		clock_gettime(CLOCK_MONOTONIC, trs);
 
 	if (work->tid)
 		if (pthread_detach(work->tid))
@@ -211,15 +239,23 @@ file_reader(void *arg)
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
+
+	clock_gettime(CLOCK_MONOTONIC, tre);
+
 	return NULL;
 } // file_reader
+
+struct timespec tps[1] = {0};
+struct timespec tpe[1] = {0};
 
 void
 process_words(int nr)
 {
 	register uint32_t spins = 0, *k = keys;
-	register char *wp = words, *w, *s;
+	register char *wp = words, *w;
 	uint32_t freqs['z' + 1] = {0};
+
+	clock_gettime(CLOCK_MONOTONIC, tps);
 
 	// We do these initialisions here after the reader threads start
 	// The speeds up application load time as the OS needs to clear
@@ -228,42 +264,49 @@ process_words(int nr)
 	frq_init();
 	hash_init();
 
-	for (register uint32_t pos = 0, key; ;) {
-		w = wp + (5 * pos++);
-
-		while (readers_done < nr) {
-			// Check if a complete word is present
-			if (w[0] && w[1] && w[2] && w[3] && w[4])
+	for (register uint32_t key, pos = 0; ;) {
+		if (pos >= num_words) {
+			if (readers_done < nr) {
+				spins++;
+				usleep(1);
+				continue;
+			}
+			if (pos >= num_words)
 				break;
-			spins++;
-			usleep(1);
 		}
-		s = w;
 
-		// This can only become true after all readers are done
-		if (pos > num_words)
-			break;
-
-		if ((key = hash_insert(w, wp)) == 0)
+		if ((key = wordkeys[pos]) == 0)
 			continue;
-		*k++ = key;
+		w = wp + (5 * pos);
+		pos++;
+
+		if (hash_insert(w, wp, key) == 0)
+			continue;
 
 		// We have a non-anagram word. Update letter frequencies
 		freqs[(int)*w++]++; freqs[(int)*w++]++;
 		freqs[(int)*w++]++; freqs[(int)*w++]++;
 		freqs[(int)*w]++;
+		*k++ = key;
 	}
 	nkeys = k - keys;
 	*k = 0;
 	for (int i = 0; i < 26; i++)
 		frq[i].f = freqs[i + 'a'];
+
+	clock_gettime(CLOCK_MONOTONIC, tpe);
+	printf("Spins = %u\n", spins);
 } // process_words
 
+struct timespec srs[1] = {0};
+struct timespec sre[1] = {0};
 void
 spawn_readers(char *start, size_t len)
 {
-	int nr = nthreads, i;
+	int nr = nthreads;
 	char *end = start + len;
+
+	clock_gettime(CLOCK_MONOTONIC, srs);
 
 	if (nr > MAX_READERS)
 		nr = MAX_READERS;
@@ -276,11 +319,12 @@ spawn_readers(char *start, size_t len)
 	if (nr > 1) {
 		// Need to zero out the word table so that the main thread can
 		// detect when a full word has been written by a reader thread
-		memset(words, 0, sizeof(words));
+		memset(wordkeys, 0, sizeof(wordkeys));
+
+		for (int i = 1; i < nr; i++)
+			pthread_create(&workers[i].tid, NULL, file_reader, workers + i);
 
 		// The main thread doesn't do reading if nthreads > 1
-		for (i = 1; i < nr; i++)
-			pthread_create(&workers[i].tid, NULL, file_reader, workers + i);
 		nr--;
 	} else {
 		// The main thread is the only thread so it has to read the file
@@ -288,8 +332,14 @@ spawn_readers(char *start, size_t len)
 		file_reader(workers);
 	}
 
+	clock_gettime(CLOCK_MONOTONIC, sre);
+
 	// The main thread processes the words as the reader threads find them
 	process_words(nr);
+
+	print_time_taken("spawn readers", srs, sre);
+	print_time_taken("process words", tps, tpe);
+	print_time_taken("file readers ", trs, tre);
 } // spawn_readers
 
 // File Reader.  Here we use mmap() for efficiency for both reading and processing
@@ -297,6 +347,8 @@ void
 read_words(char *path)
 {
 	int fd;
+
+
 	if ((fd = open(path, O_RDONLY)) < 0) {
 		perror("open");
 		exit(EXIT_FAILURE);
@@ -309,8 +361,7 @@ read_words(char *path)
 	}
 
 	size_t len = statbuf->st_size;
-	int mmap_flags = MAP_PRIVATE | MAP_POPULATE;
-	char *addr = mmap(NULL, len, PROT_READ, mmap_flags, fd, 0);
+	char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
 	if (addr == MAP_FAILED) {
 		perror("mmap");
 		exit(EXIT_FAILURE);
@@ -412,13 +463,3 @@ emit_solutions()
 
 	close(solution_fd);
 } // emit_solutions
-
-void
-print_time_taken(char *label, struct timespec *ts, struct timespec *te)
-{
-	int64_t time_taken = 1000000000LL;	// Number of ns in 1s
-	time_taken *= (te->tv_sec - ts->tv_sec);
-	time_taken += (te->tv_nsec - ts->tv_nsec);
-
-	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000, (time_taken % 1000000000) / 1000);
-} // print_time_taken
