@@ -17,6 +17,8 @@ static uint32_t	wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // be 32-byte aligned, but we align it to a typical system page boundary
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
 
+static uint32_t cf[MAX_READERS][26] __attribute__ ((aligned(64))) = {0};
+
 void
 print_time_taken(char *label, struct timespec *ts, struct timespec *te)
 {
@@ -161,9 +163,10 @@ hash_lookup(register uint32_t key, register const char *wp)
 
 // ********************* FILE READER ********************
 void
-find_words(register char *s, register char *e)
+find_words(register char *s, register char *e, uint32_t rn)
 {
 	register char *w, *wp = words, a = 'a', z = 'z';
+	register uint32_t *ft = cf[rn];
 
 	while (s < e) {
 		w = s;
@@ -192,6 +195,13 @@ find_words(register char *s, register char *e)
 
 				memcpy(to, w, 5);
 				wordkeys[pos] = key;
+
+				// Update frequency table
+				ft[*w++ - a]++;
+				ft[*w++ - a]++;
+				ft[*w++ - a]++;
+				ft[*w++ - a]++;
+				ft[*w++ - a]++;
 			}
 		}
 
@@ -204,6 +214,7 @@ void *
 file_reader(void *arg)
 {
 	struct worker *work = (struct worker *)arg;
+	uint32_t rn = work - workers;
 
 	if (work->tid)
 		if (pthread_detach(work->tid))
@@ -230,7 +241,7 @@ file_reader(void *arg)
 		if (s > work->start)
 			while ((s < e) && (*s++ != '\n'));
 
-		find_words(s, e);
+		find_words(s, e, rn);
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
@@ -240,57 +251,57 @@ file_reader(void *arg)
 void
 process_words(int nr)
 {
-	register uint32_t spins = 0, *k = keys;
-	register char *wp = words, *w;
-	uint32_t freqs['z' + 1] = {0};
+	register uint32_t spins = 0;
 
-	// We do these initialisions here after the reader threads start
-	// The speeds up application load time as the OS needs to clear
-	// less memory on startup.  Also, by initialising here, we avoid
-	// blocking other work while initialisation occurs.
-	frq_init();
+	// We do hash_init() and frq_init() here after the reader threads
+	// start. This speeds up application load time as the OS needs to
+	// clear less memory on startup.  Also, by initialising here, we
+	// avoid blocking other work while initialisation occurs.
+
+	// Build hash table and final key set
 	hash_init();
-
-	for (register uint32_t key, pos = 0; ;) {
+	for (register uint32_t *k = keys, key, pos = 0; ;) {
 		if (pos >= num_words) {
 			if (readers_done < nr) {
 				spins++;
 				usleep(1);
 				continue;
 			}
-			if (pos >= num_words)
+			if (pos >= num_words) {
+				nkeys = k - keys;
+				*k = 0;
 				break;
+			}
 		}
 
 		if ((key = wordkeys[pos]) == 0)
 			continue;
 
-		if (hash_insert(key, pos) == 0) {
-			pos++;
-			continue;
-		}
+		if (hash_insert(key, pos))
+			*k++ = key;
 
-		// We have a non-anagram word. Update letter frequencies
-		w = wp + (5 * pos++);
-		freqs[(int)*w++]++; freqs[(int)*w++]++;
-		freqs[(int)*w++]++; freqs[(int)*w++]++;
-		freqs[(int)*w]++;
-		*k++ = key;
+		pos++;
 	}
-	nkeys = k - keys;
-	*k = 0;
-	for (int i = 0; i < 26; i++)
-		frq[i].f = freqs[i + 'a'];
+
+	// All readers are done.  Collate character frequency stats
+	frq_init();
+	for (int c = 0; c < 26; c++)
+		for (int r = 0; r < nr; r++)
+			frq[c].f += cf[r][c];
 } // process_words
 
 void
 spawn_readers(char *start, size_t len)
 {
-	int nr = nthreads;
 	char *end = start + len;
+	int nr = len / (READ_CHUNK << 3);
 
 	if (nr > MAX_READERS)
 		nr = MAX_READERS;
+	if (nr > nthreads)
+		nr = nthreads;
+	if (nr < 1)
+		nr = 1;
 
 	for (uintptr_t i = 0; i < nr; i++) {
 		workers[i].start = start;
@@ -305,8 +316,8 @@ spawn_readers(char *start, size_t len)
 		for (int i = 1; i < nr; i++)
 			pthread_create(&workers[i].tid, NULL, file_reader, workers + i);
 
-		// The main thread doesn't do reading if nthreads > 1
-		nr--;
+		// The main thread doesn't do reading if nr > 1
+		atomic_fetch_add(&readers_done, 1);
 	} else {
 		// The main thread is the only thread so it has to read the file
 		workers[0].tid = 0;
