@@ -7,8 +7,8 @@
 
 all: a25 s25 v25 525
 
-#CC=clang-12
-CC=gcc
+CC=clang-12
+#CC=gcc
 
 CFLAGS=-O3 -march=native -Wall
 LIBS=-lpthread
