@@ -84,26 +84,23 @@ combo(int n, int r, int d)
 #endif
 
 
-uint32_t *dset = NULL, *zset = NULL;
-
 void
 setup_frequency_sets()
 {
-	register struct frequency *f = &frq[0];
 	register uint32_t *kp = keys, mask, *ks, key;
 
-	qsort(f, 26, sizeof(*f), by_frequency_hi);
+	qsort(frq, 26, sizeof(*frq), by_frequency_hi);
 
-	mask = f->m;
-	f->s = kp;
+	mask = frq[0].m;
+	frq[0].s = kp;
 	for (ks = kp; (key = *ks); ks++) {
 		if (key & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
 	}
-	f->e = kp;
-	f->l = kp - f->s;
+	frq[0].e = kp;
+	frq[0].l = kp - frq[0].s;
 
 	// 0-terminate this frequency key set
 	*ks++ = *kp;
@@ -115,9 +112,6 @@ setup_frequency_sets()
 	frq[1].s = kp;
 	frq[1].e = ks;
 	frq[1].l = ks - kp;
-
-	zset = keys;
-	dset = kp;
 } // setup_frequency_sets
 
 
@@ -214,7 +208,7 @@ volatile atomic_int	driver_pos = 0;
 uint32_t
 apply_four()
 {
-	register uint32_t *zp = zset, key, *fp = fourset, pos, *f, *z;
+	register uint32_t *zp = frq[0].s, key, *fp = fourset, pos, *f, *z;
 
 	do {
 		while (four_pos >= num_four) {
@@ -251,28 +245,30 @@ driver(void *arg)
 {
 	struct worker *work = (struct worker *)arg;
 	uint32_t scanbuf[4096];
-	register uint32_t *dp = dset, *sp = scanbuf;
+	register uint32_t *dp = frq[1].s, *sp = scanbuf;
 
 	if (work->tid)
 		if (pthread_detach(work->tid))
 			perror("pthread_detach");
 
 	for (;;) {
-		register uint32_t *d = dp + atomic_fetch_add(&driver_pos, 1);
+		register int pos = atomic_fetch_add(&driver_pos, 1);
+
+		if (pos >= frq[1].l)
+			break;
+
+		register uint32_t *d = dp + pos;
 		register uint32_t *s = sp;
 		register uint32_t key, scan;
 
 		// Build the scanbuf at this level
-		if (!(key = *d++))
-			break;
+		key = *d++;
 		while ((scan = *d++))
 			if (!(key & scan))
 				*s++ = scan;
 		*s++ = 0;
-		if (*scanbuf) {
-			madvise(scanbuf, sizeof(scanbuf), MADV_WILLNEED);
+		if (*sp)
 			gen_four_set(sp, s, key);
-		}
 	}
 
 	if (arg) {
