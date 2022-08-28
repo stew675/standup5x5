@@ -20,7 +20,7 @@
 
 #define	MAX_SOLUTIONS	8192
 #define	MAX_WORDS	8192
-#define	MAX_THREADS	  64
+#define	MAX_THREADS	  24
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -194,8 +194,9 @@ solve_work(void *arg)
 void
 solve()
 {
-	for (int i = 1; i < nthreads; i++)
-		pthread_create(&workers[i].tid, NULL, solve_work, workers + i);
+//	for (int i = 1; i < nthreads; i++)
+//		pthread_create(&workers[i].tid, NULL, solve_work, workers + i);
+	solve_go = 1;
 
 	// The main thread also participates in finding solutions
 	workers[0].tid = 0;
@@ -207,12 +208,32 @@ solve()
 } // solve
 
 
+void *
+waiter(void *arg)
+{
+	struct worker *work = (struct worker *)arg;
+	int wn = work - workers;
+
+	while (read_go == 0)
+		usleep(1);
+
+	if (wn < max_readers)
+		file_reader((void *)work);
+	
+	while (solve_go == 0)
+		usleep(1);
+
+	solve_work((void *)work);
+
+	return NULL;
+} // waiter
+
 // ********************* MAIN SETUP AND OUTPUT ********************
 
 int
 main(int argc, char *argv[])
 {
-	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
+	struct timespec t0[1], t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
 
 	// Copy in the default file-name
@@ -258,6 +279,11 @@ main(int argc, char *argv[])
 	if (nthreads > MAX_THREADS)
 		nthreads = MAX_THREADS;
 
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t0);
+
+	for (int i = 1; i < nthreads; i++)
+		pthread_create(&workers[i].tid, NULL, waiter, workers + i);
+
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
 	read_words(file);
@@ -293,8 +319,9 @@ main(int argc, char *argv[])
 	printf("\nNUM SOLUTIONS = %d\n", num_sol);
 
 	printf("\nTIMES TAKEN :\n");
-	print_time_taken("Total", t1, t5);
+	print_time_taken("Total", t0, t5);
 	printf("\n");
+	print_time_taken("Spawn Workers", t0, t1);
 	print_time_taken("File Load", t1, t2);
 	print_time_taken("Frequency Set Build", t2, t3);
 	print_time_taken("Main Algorithm", t3, t4);

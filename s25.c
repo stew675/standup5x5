@@ -176,7 +176,7 @@ solve_work(void *arg)
 void
 solve()
 {
-	for (uintptr_t i = 1; i < nthreads; i++)
+	for (int i = 1; i < nthreads; i++)
 		pthread_create(&workers[i].tid, NULL, solve_work, workers + i);
 
 	// Do work ourselves too!

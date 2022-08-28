@@ -9,14 +9,13 @@ static struct wordhash {
 } hashmap[HASHSZ] __attribute__ ((aligned(64)));
 
 // Allow for up to 3x the number of unique non-anagram words
-static char	words[MAX_WORDS * 15] __attribute__ ((aligned(64)));
-static uint32_t	wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
+static char     words[MAX_WORDS * 15] __attribute__ ((aligned(64)));
+static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 
 // We add 1024 here to MAX_WORDS to give us extra space to perform vector
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to a typical system page boundary
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-
 static uint32_t cf[MAX_READERS][26] __attribute__ ((aligned(64))) = {0};
 
 void
@@ -86,7 +85,6 @@ calc_key(register const char *wd)
 
 	return key;
 } // calc_key
-
 
 //********************* HASH TABLE FUNCTIONS **********************
 
@@ -193,15 +191,16 @@ find_words(register char *s, register char *e, uint32_t rn)
 				register int pos = atomic_fetch_add(&num_words, 1);
 				register char *to = wp + (5 * pos);
 
+				// Update frequency table
+				s = w;
+				ft[*s++ - a]++;
+				ft[*s++ - a]++;
+				ft[*s++ - a]++;
+				ft[*s++ - a]++;
+				ft[*s   - a]++;
+
 				memcpy(to, w, 5);
 				wordkeys[pos] = key;
-
-				// Update frequency table
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
 			}
 		}
 
@@ -215,10 +214,6 @@ file_reader(void *arg)
 {
 	struct worker *work = (struct worker *)arg;
 	uint32_t rn = work - workers;
-
-	if (work->tid)
-		if (pthread_detach(work->tid))
-			perror("pthread_detach");
 
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
 	// (except the first) only starts at a newline.  If the reader
@@ -290,6 +285,10 @@ process_words(int nr)
 			frq[c].f += cf[r][c];
 } // process_words
 
+int max_readers = 1;
+int read_go = 0;
+int solve_go = 0;
+
 void
 spawn_readers(char *start, size_t len)
 {
@@ -303,7 +302,7 @@ spawn_readers(char *start, size_t len)
 	if (nr < 1)
 		nr = 1;
 
-	for (uintptr_t i = 0; i < nr; i++) {
+	for (int i = 0; i < nr; i++) {
 		workers[i].start = start;
 		workers[i].end = end;
 	}
@@ -313,8 +312,10 @@ spawn_readers(char *start, size_t len)
 		// detect when a full word has been written by a reader thread
 		memset(wordkeys, 0, sizeof(wordkeys));
 
-		for (int i = 1; i < nr; i++)
-			pthread_create(&workers[i].tid, NULL, file_reader, workers + i);
+		max_readers = nr;
+		read_go = 1;
+//		for (int i = 1; i < nr; i++)
+//			pthread_create(&workers[i].tid, NULL, file_reader, workers + i);
 
 		// The main thread doesn't do reading if nr > 1
 		atomic_fetch_add(&readers_done, 1);
