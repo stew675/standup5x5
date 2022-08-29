@@ -199,12 +199,12 @@ gen_four_set(register uint32_t *s0, register uint32_t *s1, register uint32_t key
 } // gen_four_set
 
 // Top level driver
-volatile atomic_int	four_pos = 0;
-volatile atomic_size_t	spins = 0;
-volatile atomic_int	driver_pos = 0;
+atomic_int	four_pos = 0;
+atomic_size_t	spins = 0;
+atomic_int	driver_pos = 0;
 
 // A gormless attempt at a lockless way to process fourset
-uint32_t
+static inline uint32_t
 apply_four()
 {
 	register uint32_t *zp = frq[0].s, key, *fp = fourset, pos, *f, *z;

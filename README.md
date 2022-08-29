@@ -38,7 +38,7 @@ based laptop. On my AMD system, which runs at a fixed at 4.6GHz CPU clock with
 hyper-threading disabled, the following (internal) times are seen, which include
 the loading of the full 4MB words_alpha.txt file:
 
-**a25** takes around 24ms to complete, using 16 threads
+**a25** takes around 18ms to complete, using 16 threads
 
 **s25** takes around 2.5ms to complete using 16 threads
 
