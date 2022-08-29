@@ -286,6 +286,7 @@ process_words()
 
 static void solve_work();
 static volatile int go_solve = 0;
+static atomic_int finish_order = 0;
 
 // We create a worker pool like this because on virtual systems, especially
 // on WSL, thread-creation is very expensive, so we only want to do it once
@@ -300,6 +301,14 @@ work_pool(void *arg)
 
 	if (worker_num < num_readers)
 		file_reader(work);
+
+	if (atomic_fetch_add(&finish_order, 1) == 0) {
+		// We're the first thread to finish reading.
+		// Spawn the rest of the worker threads
+		pthread_t tid[1];
+		for (int i = num_readers; i < nthreads; i++)
+			pthread_create(tid, NULL, work_pool, workers + i);
+	}
 	
 	// Not gonna lie.  This is ugly.  We're busy-waiting until we get told
 	// to start solving.  Expensive CPU wise, but we'll accept it because
@@ -316,6 +325,7 @@ void
 spawn_readers(char *start, size_t len)
 {
 	char *end = start + len;
+	pthread_t tid[1];
 
 	num_readers = len / (READ_CHUNK << 3);
 
@@ -331,25 +341,23 @@ spawn_readers(char *start, size_t len)
 		workers[i].end = end;
 	}
 
-	if (nthreads > 1) {
-		pthread_t tid[1];
-
+	if (num_readers > 1) {
 		// Need to zero out the word table so that the main thread can
 		// detect when a word key has been written by a reader thread
 		// The main thread doesn't do reading if num_readers > 1
-		if (num_readers > 1) {
-			memset(wordkeys, 0, sizeof(wordkeys));
-			atomic_fetch_add(&readers_done, 1);
-		}
+		memset(wordkeys, 0, sizeof(wordkeys));
+		atomic_fetch_add(&readers_done, 1);
 
-		// Spawn worker threads.  Yes, this is meant to be 1..nthreads
-		for (int i = 1; i < nthreads; i++)
+		// Spawn reader threads
+		for (int i = 1; i < num_readers; i++)
 			pthread_create(tid, NULL, work_pool, workers + i);
-	}
+	} else {
+		if (nthreads > 1)
+			pthread_create(tid, NULL, work_pool, workers + 1);
 
-	// The main thread is the only reader thread so it has to read the file
-	if (num_readers < 2)
+		// The main thread is the only reader thread so it has to read
 		file_reader(workers);
+	}
 
 	// The main thread processes the words as the reader threads find them
 	process_words();
