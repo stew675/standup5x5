@@ -30,7 +30,6 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	pthread_t tid;
 	char *start;
 	char *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
@@ -173,15 +172,9 @@ find_solutions(register int depth, register int setnum, register uint32_t mask,
 } // find_solutions
 
 // Top level solver
-void *
-solve_work(void *arg)
+void
+solve_work()
 {
-	struct worker *work = (struct worker *)arg;
-
-	if (work->tid)
-		if (pthread_detach(work->tid))
-			perror("pthread_detach");
-
 	// Initial work solver.  Here we overload the use
 	// of value of setnum as our skipped argument too
 	for (int setnum = 0; setnum < 2; setnum++) {
@@ -202,18 +195,16 @@ solve_work(void *arg)
 	}
 
 	atomic_fetch_add(&solvers_done, 1);
-	return NULL;
 } // solve_work
 
 void
 solve()
 {
-	for (int i = 1; i < nthreads; i++)
-		pthread_create(&workers[i].tid, NULL, solve_work, workers + i);
+	// Instruct worker pool to commence solving
+	go_solve = 1;
 
 	// The main thread also participates in finding solutions
-	workers[0].tid = 0;
-	solve_work(workers);
+	solve_work();
 
 	// Wait for all solver threads to finish up
 	while(solvers_done < nthreads)

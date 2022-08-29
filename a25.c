@@ -25,7 +25,6 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	pthread_t tid;
 	char *start;
 	char *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
@@ -212,7 +211,7 @@ apply_four()
 
 	do {
 		while (four_pos >= num_four) {
-			if (solvers_synced >= (nthreads - 1))
+			if (solvers_synced >= nthreads)
 				return four_pos;
 			atomic_fetch_add(&spins, 1);
 		}
@@ -223,7 +222,7 @@ apply_four()
 
 		// We over-shot.  Check if all threads are done
 		while (pos >= num_four) {
-			if (solvers_synced >= (nthreads - 1))
+			if (solvers_synced >= nthreads)
 				return pos;
 			atomic_fetch_add(&spins, 1);
 		}
@@ -240,16 +239,11 @@ apply_four()
 
 
 // driver is written to allow for either threaded or non-threaded use
-void *
-driver(void *arg)
+void
+solve_work()
 {
-	struct worker *work = (struct worker *)arg;
 	uint32_t scanbuf[4096];
 	register uint32_t *dp = frq[1].s, *sp = scanbuf;
-
-	if (work->tid)
-		if (pthread_detach(work->tid))
-			perror("pthread_detach");
 
 	for (;;) {
 		register int pos = atomic_fetch_add(&driver_pos, 1);
@@ -271,38 +265,33 @@ driver(void *arg)
 			gen_four_set(sp, s, key);
 	}
 
-	if (arg) {
-		atomic_fetch_add(&solvers_synced, 1);
-	}
+	atomic_fetch_add(&solvers_synced, 1);
 
 	apply_four();
 
-	if (arg) {
-		atomic_fetch_add(&solvers_done, 1);
-	}
-	return NULL;
-} // driver
+	atomic_fetch_add(&solvers_done, 1);
+} // solve_work
 
 
 void
 solve()
 {
-	for (int i = 1; i < nthreads; i++)
-		pthread_create(&workers[i].tid, NULL, driver, workers + i);
+	// Instruct waiting worker threads to start solving
+	go_solve = 1;
 
 	// We have to solve ourselves if we're the only thread
-	if (nthreads < 2) {
-		workers[0].tid = 0;
-		driver(workers);
-	}
+	if (nthreads < 2)
+		solve_work();
+	else
+		atomic_fetch_add(&solvers_synced, 1);
 
 	// Process fourset while waiting
 	apply_four();
+	atomic_fetch_add(&solvers_done, 1);
 
-	while(solvers_done < (nthreads - 1))
+	while(solvers_done < nthreads)
 		usleep(1);
 } // solve
-
 
 int
 main(int argc, char *argv[])

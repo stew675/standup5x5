@@ -9,14 +9,13 @@ static struct wordhash {
 } hashmap[HASHSZ] __attribute__ ((aligned(64)));
 
 // Allow for up to 3x the number of unique non-anagram words
-static char	words[MAX_WORDS * 15] __attribute__ ((aligned(64)));
-static uint32_t	wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
+static char     words[MAX_WORDS * 15] __attribute__ ((aligned(64)));
+static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 
 // We add 1024 here to MAX_WORDS to give us extra space to perform vector
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to a typical system page boundary
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-
 static uint32_t cf[MAX_READERS][26] __attribute__ ((aligned(64))) = {0};
 
 void
@@ -86,7 +85,6 @@ calc_key(register const char *wd)
 
 	return key;
 } // calc_key
-
 
 //********************* HASH TABLE FUNCTIONS **********************
 
@@ -176,9 +174,9 @@ find_words(register char *s, register char *e, uint32_t rn)
 		if (*s++ < a) continue;
 		if (*s++ < a) continue;
 
-		// Rescanning twice is fast because the < a above
-		// eliminates almost everything not of interest,
-		// and the word will be in the L1 cache already
+		// Even though we're rescanning twice here, it is still fast
+		// because the < a above eliminates almost everything not of
+		// interest, and the word will be in the L1 cache already
 		if (*s < a || *s > z) {
 			s = w;
 			if (*s++ > z) continue;
@@ -193,15 +191,15 @@ find_words(register char *s, register char *e, uint32_t rn)
 				register int pos = atomic_fetch_add(&num_words, 1);
 				register char *to = wp + (5 * pos);
 
-				memcpy(to, w, 5);
-				wordkeys[pos] = key;
+				// Update frequency table and
+				// copy word at the same time
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
 
-				// Update frequency table
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
-				ft[*w++ - a]++;
+				wordkeys[pos] = key;
 			}
 		}
 
@@ -210,15 +208,10 @@ find_words(register char *s, register char *e, uint32_t rn)
 	}
 } // find_words
 
-void *
-file_reader(void *arg)
+void
+file_reader(struct worker *work)
 {
-	struct worker *work = (struct worker *)arg;
 	uint32_t rn = work - workers;
-
-	if (work->tid)
-		if (pthread_detach(work->tid))
-			perror("pthread_detach");
 
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
 	// (except the first) only starts at a newline.  If the reader
@@ -245,11 +238,12 @@ file_reader(void *arg)
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
-	return NULL;
 } // file_reader
 
+static int num_readers = 0;
+
 void
-process_words(int nr)
+process_words()
 {
 	register uint32_t spins = 0;
 
@@ -262,7 +256,7 @@ process_words(int nr)
 	hash_init();
 	for (register uint32_t *k = keys, key, pos = 0; ;) {
 		if (pos >= num_words) {
-			if (readers_done < nr) {
+			if (readers_done < num_readers) {
 				spins++;
 				usleep(1);
 				continue;
@@ -286,46 +280,79 @@ process_words(int nr)
 	// All readers are done.  Collate character frequency stats
 	frq_init();
 	for (int c = 0; c < 26; c++)
-		for (int r = 0; r < nr; r++)
+		for (int r = 0; r < num_readers; r++)
 			frq[c].f += cf[r][c];
 } // process_words
+
+static void solve_work();
+static volatile int go_solve = 0;
+
+// We create a worker pool like this because on virtual systems, especially
+// on WSL, thread-creation is very expensive, so we only want to do it once
+void *
+work_pool(void *arg)
+{
+	struct worker *work = (struct worker *)arg;
+	int worker_num = work - workers;
+
+	if (pthread_detach(pthread_self()))
+		perror("pthread_detach");
+
+	if (worker_num < num_readers)
+		file_reader(work);
+	
+	// Not gonna lie.  This is ugly.  We're busy-waiting until we get told
+	// to start solving.  Expensive CPU wise, but we'll accept it because
+	// the whole thing runs so fast, and we're after the fastest possible
+	while (!go_solve)
+		asm("nop");
+
+	solve_work();
+
+	return NULL;
+} // work_pool
 
 void
 spawn_readers(char *start, size_t len)
 {
 	char *end = start + len;
-	int nr = len / (READ_CHUNK << 3);
 
-	if (nr > MAX_READERS)
-		nr = MAX_READERS;
-	if (nr > nthreads)
-		nr = nthreads;
-	if (nr < 1)
-		nr = 1;
+	num_readers = len / (READ_CHUNK << 3);
 
-	for (uintptr_t i = 0; i < nr; i++) {
+	if (num_readers > MAX_READERS)
+		num_readers = MAX_READERS;
+	if (num_readers > nthreads)
+		num_readers = nthreads;
+	if (num_readers < 1)
+		num_readers = 1;
+
+	for (int i = 0; i < num_readers; i++) {
 		workers[i].start = start;
 		workers[i].end = end;
 	}
 
-	if (nr > 1) {
+	if (nthreads > 1) {
+		pthread_t tid[1];
+
 		// Need to zero out the word table so that the main thread can
-		// detect when a full word has been written by a reader thread
-		memset(wordkeys, 0, sizeof(wordkeys));
+		// detect when a word key has been written by a reader thread
+		// The main thread doesn't do reading if num_readers > 1
+		if (num_readers > 1) {
+			memset(wordkeys, 0, sizeof(wordkeys));
+			atomic_fetch_add(&readers_done, 1);
+		}
 
-		for (int i = 1; i < nr; i++)
-			pthread_create(&workers[i].tid, NULL, file_reader, workers + i);
-
-		// The main thread doesn't do reading if nr > 1
-		atomic_fetch_add(&readers_done, 1);
-	} else {
-		// The main thread is the only thread so it has to read the file
-		workers[0].tid = 0;
-		file_reader(workers);
+		// Spawn worker threads.  Yes, this is meant to be 1..nthreads
+		for (int i = 1; i < nthreads; i++)
+			pthread_create(tid, NULL, work_pool, workers + i);
 	}
 
+	// The main thread is the only reader thread so it has to read the file
+	if (num_readers < 2)
+		file_reader(workers);
+
 	// The main thread processes the words as the reader threads find them
-	process_words(nr);
+	process_words();
 } // spawn_readers
 
 // File Reader.  Here we use mmap() for efficiency for both reading and processing

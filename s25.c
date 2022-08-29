@@ -25,7 +25,6 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	pthread_t tid;
 	char     *start;
 	char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
@@ -148,17 +147,12 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 } // find_solutions
 
 // Thread driver
-void *
-solve_work(void *arg)
+void
+solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
-	struct worker *work = (struct worker *)arg;
 	register struct frequency *f = frq;
 	register int32_t pos;
-
-	if (work->tid)
-		if (pthread_detach(work->tid))
-			perror("pthread_detach");
 
 	// Solve starting with least frequent set
 	while ((pos = atomic_fetch_add(&f->pos, 1)) < f->l)
@@ -170,24 +164,21 @@ solve_work(void *arg)
 		find_solutions(1, f + 1, solution, 0, f->s[pos], 1);
 
 	atomic_fetch_add(&solvers_done, 1);
-	return NULL;
 } // solve_work
 
 void
 solve()
 {
-	for (uintptr_t i = 1; i < nthreads; i++)
-		pthread_create(&workers[i].tid, NULL, solve_work, workers + i);
+	// Instruct worker pool to start solving
+	go_solve = 1;
 
 	// Do work ourselves too!
-	workers[0].tid = 0;
-	solve_work(workers);
+	solve_work();
 
 	// Wait for any other threads to finish up
 	while(solvers_done < nthreads)
 		usleep(1);
 } // solve
-
 
 int
 main(int argc, char *argv[])
