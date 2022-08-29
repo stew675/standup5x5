@@ -201,7 +201,7 @@ void
 solve()
 {
 	// Instruct worker pool to commence solving
-	go_solve = 1;
+	start_solvers();
 
 	// The main thread also participates in finding solutions
 	solve_work();

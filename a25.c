@@ -277,7 +277,7 @@ void
 solve()
 {
 	// Instruct waiting worker threads to start solving
-	go_solve = 1;
+	start_solvers();
 
 	// We have to solve ourselves if we're the only thread
 	if (nthreads < 2)

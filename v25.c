@@ -188,7 +188,7 @@ void
 solve()
 {
 	// Instruct any waiting worker-threads to start solving
-	go_solve = 1;
+	start_solvers();
 
 	// The main thread also participates in finding solutions
 	solve_work();

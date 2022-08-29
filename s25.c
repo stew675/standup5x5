@@ -170,7 +170,7 @@ void
 solve()
 {
 	// Instruct worker pool to start solving
-	go_solve = 1;
+	start_solvers();
 
 	// Do work ourselves too!
 	solve_work();

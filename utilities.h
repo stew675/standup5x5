@@ -281,6 +281,13 @@ atomic_int finish_order = 0;
 volatile int go_solve = 0;
 static void solve_work();
 
+void
+start_solvers()
+{
+	go_solve = 1;
+} // start_solvers
+
+
 // We create a worker pool like this because on virtual systems, especially
 // on WSL, thread-creation is very expensive, so we only want to do it once
 void *
