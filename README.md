@@ -34,16 +34,18 @@ current directory
 ### Execution Times
 
 My development systems are a desktop AMD 5950x based PC, and an Intel i7-1165G7
-based laptop. On my AMD system, the following (internal) times are seen:
+based laptop. On my AMD system, which runs at a fixed at 4.6GHz CPU clock with
+hyper-threading disabled, the following (internal) times are seen, which include
+the loading of the full 4MB words_alpha.txt file:
 
-**a25** takes around 19ms to complete, using 15 threads
+**a25** takes around 24ms to complete, using 16 threads
 
-**s25** takes around 3.1ms to complete using 14 threads
+**s25** takes around 2.5ms to complete using 16 threads
 
-**v25** takes around 1.8ms to complete using 14 threads
+**v25** takes around 1.5ms to complete using 16 threads
 
-**525** won't run on my AMD system.  On my Intel laptop it takes 2.8ms to complete
-using 8 threads.  I estimate that on a full desktop runtimes of 1.6ms should be achievable
+**525** won't run on my AMD system.  On my Intel laptop it takes 2.6ms to complete
+using 8 threads.  I estimate that on a full desktop runtimes of 1.2ms should be achievable
 
 All algorithms use a bit-wise representation of the words for efficiency of comparing
 
@@ -166,7 +168,7 @@ in the array any particular reader would insert their word.
 
 I then had the main thread process the word array that was being built by the
 reader threads to build the hash table concurrently.  Doing all this together
-managed to get file load and hash table build times to under 0.8ms on my AMD
+managed to get file load and hash table build times to under 0.7ms on my AMD
 system.
 
 
