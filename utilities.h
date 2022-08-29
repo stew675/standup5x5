@@ -240,8 +240,10 @@ file_reader(struct worker *work)
 	atomic_fetch_add(&readers_done, 1);
 } // file_reader
 
+static int num_readers = 0;
+
 void
-process_words(int nr)
+process_words()
 {
 	register uint32_t spins = 0;
 
@@ -254,7 +256,7 @@ process_words(int nr)
 	hash_init();
 	for (register uint32_t *k = keys, key, pos = 0; ;) {
 		if (pos >= num_words) {
-			if (readers_done < nr) {
+			if (readers_done < num_readers) {
 				spins++;
 				usleep(1);
 				continue;
@@ -278,51 +280,79 @@ process_words(int nr)
 	// All readers are done.  Collate character frequency stats
 	frq_init();
 	for (int c = 0; c < 26; c++)
-		for (int r = 0; r < nr; r++)
+		for (int r = 0; r < num_readers; r++)
 			frq[c].f += cf[r][c];
 } // process_words
 
-int max_readers = 1;
-int read_go = 0;
-int solve_go = 0;
+static void solve_work();
+static volatile int go_solve = 0;
+
+// We create a worker pool like this because on virtual systems, especially
+// on WSL, thread-creation is very expensive, so we only want to do it once
+void *
+work_pool(void *arg)
+{
+	struct worker *work = (struct worker *)arg;
+	int worker_num = work - workers;
+
+	if (pthread_detach(pthread_self()))
+		perror("pthread_detach");
+
+	if (worker_num < num_readers)
+		file_reader(work);
+	
+	// Not gonna lie.  This is ugly.  We're busy-waiting until we get told
+	// to start solving.  Expensive CPU wise, but we'll accept it because
+	// the whole thing runs so fast, and we're after the fastest possible
+	while (!go_solve)
+		asm("nop");
+
+	solve_work();
+
+	return NULL;
+} // work_pool
 
 void
 spawn_readers(char *start, size_t len)
 {
 	char *end = start + len;
-	int nr = len / (READ_CHUNK << 3);
 
-	if (nr > MAX_READERS)
-		nr = MAX_READERS;
-	if (nr > nthreads)
-		nr = nthreads;
-	if (nr < 1)
-		nr = 1;
+	num_readers = len / (READ_CHUNK << 3);
 
-	max_readers = nr;
+	if (num_readers > MAX_READERS)
+		num_readers = MAX_READERS;
+	if (num_readers > nthreads)
+		num_readers = nthreads;
+	if (num_readers < 1)
+		num_readers = 1;
 
-	for (int i = 0; i < nr; i++) {
+	for (int i = 0; i < num_readers; i++) {
 		workers[i].start = start;
 		workers[i].end = end;
 	}
 
-	if (nr > 1) {
+	if (nthreads > 1) {
+		pthread_t tid[1];
+
 		// Need to zero out the word table so that the main thread can
-		// detect when a full word has been written by a reader thread
-		memset(wordkeys, 0, sizeof(wordkeys));
+		// detect when a word key has been written by a reader thread
+		// The main thread doesn't do reading if num_readers > 1
+		if (num_readers > 1) {
+			memset(wordkeys, 0, sizeof(wordkeys));
+			atomic_fetch_add(&readers_done, 1);
+		}
 
-		// Instruct waiting worker threads to start reading
-		read_go = 1;
-
-		// The main thread doesn't do reading if nr > 1
-		atomic_fetch_add(&readers_done, 1);
-	} else {
-		// The main thread is the only thread so it has to read the file
-		file_reader(workers);
+		// Spawn worker threads.  Yes, this is meant to be 1..nthreads
+		for (int i = 1; i < nthreads; i++)
+			pthread_create(tid, NULL, work_pool, workers + i);
 	}
 
+	// The main thread is the only reader thread so it has to read the file
+	if (num_readers < 2)
+		file_reader(workers);
+
 	// The main thread processes the words as the reader threads find them
-	process_words(nr);
+	process_words();
 } // spawn_readers
 
 // File Reader.  Here we use mmap() for efficiency for both reading and processing
