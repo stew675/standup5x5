@@ -26,7 +26,6 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	pthread_t tid;
 	char     *start;
 	char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
@@ -166,17 +165,12 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 } // find_solutions
 
 // Thread driver
-void *
-solve_work(void *arg)
+void
+solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
-	struct worker *work = (struct worker *)arg;
 	register struct frequency *f = frq;
 	register int32_t pos;
-
-	if (work->tid)
-		if (pthread_detach(work->tid))
-			perror("pthread_detach");
 
 	// Solve starting with least frequent set
 	while ((pos = atomic_fetch_add(&f->pos, 1)) < f->l)
@@ -188,45 +182,45 @@ solve_work(void *arg)
 		find_solutions(1, f + 1, 0, 1, solution, f->s[pos]);
 
 	atomic_fetch_add(&solvers_done, 1);
-	return NULL;
 } // solve_work
 
 void
 solve()
 {
-//	for (int i = 1; i < nthreads; i++)
-//		pthread_create(&workers[i].tid, NULL, solve_work, workers + i);
+	// Instruct any waiting worker-threads to start solving
 	solve_go = 1;
 
 	// The main thread also participates in finding solutions
-	workers[0].tid = 0;
-	solve_work(workers);
+	solve_work();
 
 	// Wait for all solver threads to finish up
 	while(solvers_done < nthreads)
 		usleep(1);
 } // solve
 
-
 void *
-waiter(void *arg)
+work_pool(void *arg)
 {
 	struct worker *work = (struct worker *)arg;
 	int wn = work - workers;
+
+	if (pthread_detach(pthread_self()))
+		perror("pthread_detach");
 
 	while (read_go == 0)
 		usleep(1);
 
 	if (wn < max_readers)
-		file_reader((void *)work);
+		file_reader(work);
 	
 	while (solve_go == 0)
 		usleep(1);
 
-	solve_work((void *)work);
+	solve_work();
 
 	return NULL;
-} // waiter
+} // work_pool
+
 
 // ********************* MAIN SETUP AND OUTPUT ********************
 
@@ -235,6 +229,7 @@ main(int argc, char *argv[])
 {
 	struct timespec t0[1], t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
+	pthread_t tid[1];
 
 	// Copy in the default file-name
 	strcpy(file, "words_alpha.txt");
@@ -282,7 +277,7 @@ main(int argc, char *argv[])
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t0);
 
 	for (int i = 1; i < nthreads; i++)
-		pthread_create(&workers[i].tid, NULL, waiter, workers + i);
+		pthread_create(tid, NULL, work_pool, workers + i);
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 

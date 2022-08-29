@@ -25,7 +25,6 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	pthread_t tid;
 	char *start;
 	char *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
@@ -246,16 +245,11 @@ apply_four()
 
 
 // driver is written to allow for either threaded or non-threaded use
-void *
-driver(void *arg)
+void
+driver()
 {
-	struct worker *work = (struct worker *)arg;
 	uint32_t scanbuf[4096];
 	register uint32_t *dp = dset, *sp = scanbuf;
-
-	if (work->tid)
-		if (pthread_detach(work->tid))
-			perror("pthread_detach");
 
 	for (;;) {
 		register uint32_t *d = dp + atomic_fetch_add(&driver_pos, 1);
@@ -275,44 +269,62 @@ driver(void *arg)
 		}
 	}
 
-	if (arg) {
-		atomic_fetch_add(&solvers_synced, 1);
-	}
+	atomic_fetch_add(&solvers_synced, 1);
 
 	apply_four();
 
-	if (arg) {
-		atomic_fetch_add(&solvers_done, 1);
-	}
-	return NULL;
+	atomic_fetch_add(&solvers_done, 1);
 } // driver
 
 
 void
 solve()
 {
-	for (int i = 1; i < nthreads; i++)
-		pthread_create(&workers[i].tid, NULL, driver, workers + i);
+	solve_go = 1;
 
 	// We have to solve ourselves if we're the only thread
-	if (nthreads < 2) {
-		workers[0].tid = 0;
-		driver(workers);
-	}
+	if (nthreads < 2)
+		driver();
+	else
+		atomic_fetch_add(&solvers_synced, 1);
 
 	// Process fourset while waiting
 	apply_four();
+	atomic_fetch_add(&solvers_done, 1);
 
 	while(solvers_done < (nthreads - 1))
 		usleep(1);
 } // solve
 
+void *
+work_pool(void *arg)
+{
+	struct worker *work = (struct worker *)arg;
+	int wn = work - workers;
+
+	if (pthread_detach(pthread_self()))
+		perror("pthread_detach");
+
+	while (read_go == 0)
+		usleep(1);
+
+	if (wn < max_readers)
+		file_reader(work);
+	
+	while (solve_go == 0)
+		usleep(1);
+
+	driver();
+
+	return NULL;
+} // work_pool
 
 int
 main(int argc, char *argv[])
 {
-	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
+	struct timespec t0[1], t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
+	pthread_t tid[1];
 
 	// Copy in a default file-name
 	strcpy(file, "words_alpha.txt");
@@ -357,6 +369,11 @@ main(int argc, char *argv[])
 	if (nthreads > MAX_THREADS)
 		nthreads = MAX_THREADS;
 
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t0);
+
+	for (int i = 1; i < nthreads; i++)
+		pthread_create(tid, NULL, work_pool, workers + i);
+
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
 	read_words(file);
@@ -388,8 +405,9 @@ main(int argc, char *argv[])
 	printf("\nNUM SOLUTIONS = %d\n", num_sol);
 
 	printf("\nTIMES TAKEN :\n");
-	print_time_taken("Total", t1, t5);
+	print_time_taken("Total", t0, t5);
 	printf("\n");
+	print_time_taken("Spawn Readers", t0, t1);
 	print_time_taken("File Load", t1, t2);
 	print_time_taken("Frequency Set Build", t2, t3);
 	print_time_taken("Main Algorithm", t3, t4);

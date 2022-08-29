@@ -174,9 +174,9 @@ find_words(register char *s, register char *e, uint32_t rn)
 		if (*s++ < a) continue;
 		if (*s++ < a) continue;
 
-		// Rescanning twice is fast because the < a above
-		// eliminates almost everything not of interest,
-		// and the word will be in the L1 cache already
+		// Even though we're rescanning twice here, it is still fast
+		// because the < a above eliminates almost everything not of
+		// interest, and the word will be in the L1 cache already
 		if (*s < a || *s > z) {
 			s = w;
 			if (*s++ > z) continue;
@@ -191,15 +191,14 @@ find_words(register char *s, register char *e, uint32_t rn)
 				register int pos = atomic_fetch_add(&num_words, 1);
 				register char *to = wp + (5 * pos);
 
-				// Update frequency table
-				s = w;
-				ft[*s++ - a]++;
-				ft[*s++ - a]++;
-				ft[*s++ - a]++;
-				ft[*s++ - a]++;
-				ft[*s   - a]++;
+				// Update frequency table and
+				// copy word at the same time
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
+				ft[(*to++ = *w++) - a]++;
 
-				memcpy(to, w, 5);
 				wordkeys[pos] = key;
 			}
 		}
@@ -209,10 +208,9 @@ find_words(register char *s, register char *e, uint32_t rn)
 	}
 } // find_words
 
-void *
-file_reader(void *arg)
+void
+file_reader(struct worker *work)
 {
-	struct worker *work = (struct worker *)arg;
 	uint32_t rn = work - workers;
 
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
@@ -240,7 +238,6 @@ file_reader(void *arg)
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
-	return NULL;
 } // file_reader
 
 void
@@ -302,6 +299,8 @@ spawn_readers(char *start, size_t len)
 	if (nr < 1)
 		nr = 1;
 
+	max_readers = nr;
+
 	for (int i = 0; i < nr; i++) {
 		workers[i].start = start;
 		workers[i].end = end;
@@ -312,16 +311,13 @@ spawn_readers(char *start, size_t len)
 		// detect when a full word has been written by a reader thread
 		memset(wordkeys, 0, sizeof(wordkeys));
 
-		max_readers = nr;
+		// Instruct waiting worker threads to start reading
 		read_go = 1;
-//		for (int i = 1; i < nr; i++)
-//			pthread_create(&workers[i].tid, NULL, file_reader, workers + i);
 
 		// The main thread doesn't do reading if nr > 1
 		atomic_fetch_add(&readers_done, 1);
 	} else {
 		// The main thread is the only thread so it has to read the file
-		workers[0].tid = 0;
 		file_reader(workers);
 	}
 
