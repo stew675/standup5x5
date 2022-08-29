@@ -34,7 +34,7 @@ current directory
 ### Execution Times
 
 My development systems are a desktop AMD 5950x based PC, and an Intel i7-1165G7
-based laptop. On my AMD system, which runs at a fixed at 4.6GHz CPU clock with
+based laptop. On my AMD system, which runs at a fixed at 4.7GHz CPU clock with
 hyper-threading disabled, the following (internal) times are seen, which include
 the loading of the full 4MB words_alpha.txt file:
 
@@ -42,7 +42,7 @@ the loading of the full 4MB words_alpha.txt file:
 
 **s25** takes around 2.5ms to complete using 16 threads
 
-**v25** takes around 1.5ms to complete using 16 threads
+**v25** takes around 1.4ms to complete using 16 threads
 
 **525** won't run on my AMD system.  On my Intel laptop it takes 2.6ms to complete
 using 8 threads.  I estimate that on a full desktop runtimes of 1.2ms should be achievable

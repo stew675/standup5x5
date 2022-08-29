@@ -45,7 +45,7 @@ static struct frequency {
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
-volatile atomic_int num_words	__attribute__ ((aligned(64))) = 0;
+atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
 atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
 atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done = 0;
