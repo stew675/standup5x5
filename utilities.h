@@ -310,9 +310,9 @@ work_pool(void *arg)
 			pthread_create(tid, NULL, work_pool, workers + i);
 	}
 	
-	// Not gonna lie.  This is ugly.  We're busy-waiting until we get told
-	// to start solving.  Expensive CPU wise, but we'll accept it because
-	// the whole thing runs so fast, and we're after the fastest possible
+	// Not gonna lie.  This is ugly.  We're busy-waiting until we get
+	// told to start solving.  It shouldn't be for too long though...
+	// I tried many different methods but this was always the fastest
 	while (!go_solve)
 		asm("nop");
 
