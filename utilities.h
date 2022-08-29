@@ -163,28 +163,18 @@ hash_lookup(register uint32_t key, register const char *wp)
 void
 find_words(register char *s, register char *e, uint32_t rn)
 {
-	register char *w, *wp = words, a = 'a', z = 'z';
+	register char *w, *wp = words, a = 'a', z = 'z', nl = '\n', c;
 	register uint32_t *ft = cf[rn];
 
-	while (s < e) {
-		w = s;
-		if (*s++ < a) continue;
-		if (*s++ < a) continue;
-		if (*s++ < a) continue;
-		if (*s++ < a) continue;
-		if (*s++ < a) continue;
+	for (w = s; s < e; w = s) {
+		c = *s++; if ((c < a) || (c > z)) continue;
+		c = *s++; if ((c < a) || (c > z)) continue;
+		c = *s++; if ((c < a) || (c > z)) continue;
+		c = *s++; if ((c < a) || (c > z)) continue;
+		c = *s++; if ((c < a) || (c > z)) continue;
 
-		// Even though we're rescanning twice here, it is still fast
-		// because the < a above eliminates almost everything not of
-		// interest, and the word will be in the L1 cache already
-		if (*s < a || *s > z) {
-			s = w;
-			if (*s++ > z) continue;
-			if (*s++ > z) continue;
-			if (*s++ > z) continue;
-			if (*s++ > z) continue;
-			if (*s++ > z) continue;
-
+		c = *s++;
+		if ((c < a) || (c > z)) {
 			// Reject words without 5 unique [a..z] characters
 			register uint32_t key = calc_key(w);
 			if (__builtin_popcount(key) == 5) {
@@ -204,7 +194,9 @@ find_words(register char *s, register char *e, uint32_t rn)
 		}
 
 		// Just quickly find the next line
-		while (*s++ != '\n');
+		if (c == nl)
+			continue;
+		while (*s++ != nl);
 	}
 } // find_words
 
@@ -241,6 +233,7 @@ file_reader(struct worker *work)
 } // file_reader
 
 static int num_readers = 0;
+static int num_workers = 1;	// Main thread is a worker too
 
 void
 process_words()
@@ -306,7 +299,7 @@ work_pool(void *arg)
 		// We're the first thread to finish reading.
 		// Spawn the rest of the worker threads
 		pthread_t tid[1];
-		for (int i = num_readers; i < nthreads; i++)
+		for (int i = num_workers; i < nthreads; i++)
 			pthread_create(tid, NULL, work_pool, workers + i);
 	}
 	
@@ -349,13 +342,15 @@ spawn_readers(char *start, size_t len)
 		atomic_fetch_add(&readers_done, 1);
 
 		// Spawn reader threads
+		num_workers = num_readers;	// Main thread is a worker too
 		for (int i = 1; i < num_readers; i++)
 			pthread_create(tid, NULL, work_pool, workers + i);
 	} else {
-		if (nthreads > 1)
+	       	if (nthreads > 1) {
+			num_workers = 2;	// Main thread is a worker too
 			pthread_create(tid, NULL, work_pool, workers + 1);
-
-		// The main thread is the only reader thread so it has to read
+		}
+		// The main thread must do reading
 		file_reader(workers);
 	}
 
@@ -363,7 +358,7 @@ spawn_readers(char *start, size_t len)
 	process_words();
 } // spawn_readers
 
-// File Reader.  Here we use mmap() for efficiency for both reading and processing
+// File Reader.  We use mmap() for efficiency for both reading and processing
 void
 read_words(char *path)
 {
