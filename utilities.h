@@ -317,6 +317,7 @@ work_pool(void *arg)
 void
 spawn_readers(char *start, size_t len)
 {
+	int main_must_read = 1;
 	char *end = start + len;
 	pthread_t tid[1];
 
@@ -339,20 +340,26 @@ spawn_readers(char *start, size_t len)
 		// detect when a word key has been written by a reader thread
 		// The main thread doesn't do reading if num_readers > 1
 		memset(wordkeys, 0, sizeof(wordkeys));
-		atomic_fetch_add(&readers_done, 1);
 
 		// Spawn reader threads
 		num_workers = num_readers;	// Main thread is a worker too
 		for (int i = 1; i < num_readers; i++)
 			pthread_create(tid, NULL, work_pool, workers + i);
-	} else {
-	       	if (nthreads > 1) {
-			num_workers = 2;	// Main thread is a worker too
-			pthread_create(tid, NULL, work_pool, workers + 1);
-		}
-		// The main thread must do reading
-		file_reader(workers);
+
+		if (num_readers > 2)
+			main_must_read = 0;
+	} else if (nthreads > 1) {
+		// Start the spawn of worker threads
+		// Remember, the main thread is a worker too
+		num_workers = 2;
+		pthread_create(tid, NULL, work_pool, workers + 1);
 	}
+
+	// Check if main thread must do reading
+	if (main_must_read)
+		file_reader(workers);
+	else
+		atomic_fetch_add(&readers_done, 1);
 
 	// The main thread processes the words as the reader threads find them
 	process_words();
