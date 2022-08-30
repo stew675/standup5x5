@@ -195,7 +195,8 @@ solve()
 
 	// Wait for all solver threads to finish up
 	while(solvers_done < nthreads)
-		usleep(1);
+		asm("nop");
+//		usleep(1);
 } // solve
 
 

@@ -1,6 +1,6 @@
 #define	HASHSZ            39009
 #define READ_CHUNK        10240
-#define MAX_READERS          14    // Virtual systems don't like too many readers
+#define MAX_READERS          16    // Virtual systems don't like too many readers
 
 // Word Hash Entries
 static struct wordhash {
@@ -239,13 +239,11 @@ file_reader(struct worker *work)
 		clock_gettime(CLOCK_MONOTONIC, r2);
 } // file_reader
 
-void
+uint64_t
 process_words()
 {
-	register uint32_t spins = 0;
-	struct timespec t1[1], t2[1];
+	register uint64_t spins = 0;
 
-	clock_gettime(CLOCK_MONOTONIC, t1);
 	// We do hash_init() and frq_init() here after the reader threads
 	// start. This speeds up application load time as the OS needs to
 	// clear less memory on startup.  Also, by initialising here, we
@@ -283,9 +281,7 @@ process_words()
 		for (int r = 0; r < num_readers; r++)
 			frq[c].f += cf[r][c];
 
-	clock_gettime(CLOCK_MONOTONIC, t2);
-	print_time_taken("Process Words", t1, t2);
-	printf("Spins = %u\n", spins);
+	return spins;
 } // process_words
 
 atomic_int finish_order = 0;
@@ -338,7 +334,7 @@ spawn_readers(char *start, size_t len)
 	int main_must_read = 1;
 	char *end = start + len;
 	pthread_t tid[1];
-	struct timespec t1[1], t2[1];
+	struct timespec t1[1], t2[1], t3[1];
 
 	clock_gettime(CLOCK_MONOTONIC, t1);
 
@@ -386,12 +382,15 @@ spawn_readers(char *start, size_t len)
 		atomic_fetch_add(&readers_done, 1);
 
 	clock_gettime(CLOCK_MONOTONIC, t2);
-	print_time_taken("Spawn readers", t1, t2);
 
 	// The main thread processes the words as the reader threads find them
-	process_words();
+	uint64_t spins = process_words();
 
+	clock_gettime(CLOCK_MONOTONIC, t3);
+	print_time_taken("Spawn readers", t1, t2);
+	print_time_taken("Process Words", t2, t3);
 	print_time_taken("File Reader", r1, r2);
+	printf("Spins = %lu\n", spins);
 } // spawn_readers
 
 // File Reader.  We use mmap() for efficiency for both reading and processing
