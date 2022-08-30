@@ -2,6 +2,7 @@
 #include <time.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 #include <assert.h>
 #include "keys.h"
 
@@ -65,24 +66,58 @@ hash_insert(register uint32_t key, register uint32_t pos, register uint32_t hash
 	return key;
 } // hash_insert
 
+uint32_t
+hash_lookup(register uint32_t key, register uint32_t hashsz)
+{
+	register uint32_t col = 0, hashpos = key % hashsz;
+
+	do {
+		if (keymap[hashpos] == key)
+			break;
+
+		if (keymap[hashpos] == 0)
+			return UINT32_MAX;
+
+		// Handle full hash table condition
+		if (++col == hashsz)
+			return UINT32_MAX;
+
+		if (++hashpos == hashsz)
+			hashpos -= hashsz;
+	} while (1);
+
+	hash_collisions += col;
+
+	return posmap[hashpos];
+} // hash_insert
 
 
 int
-main()
+main(int argc, char *argv[])
 {
 	struct timespec ts[1], te[1];
 	int nkeys = sizeof(keys) / sizeof(*keys);
 	int64_t min_time_taken = 1000000000LL;
+	uint32_t min_col = 10000;
 
-	for (register uint32_t hashsz = nkeys + 100; hashsz < HASHSZ; hashsz++) {
+	register uint32_t hashsz = atoi(argv[1]);
+	if (hashsz < (nkeys + 100))
+		exit(1);
+//	for (register uint32_t hashsz = nkeys + 100; hashsz < HASHSZ; hashsz++) {
 		int64_t time_taken = 1000000000LL;
-		uint32_t key, *k = keys;
+		uint32_t key, *k;
 
 		clock_gettime(CLOCK_MONOTONIC, ts);
 
 		hash_init(hashsz);
+
+		k = keys;
 		while ((key = *k++))
 			hash_insert(key, (uint32_t)(k - keys), hashsz);
+
+		k = keys;
+		while ((key = *k++))
+			hash_lookup(key, hashsz);
 
 		clock_gettime(CLOCK_MONOTONIC, te);
 
@@ -93,6 +128,13 @@ main()
 			printf("HASHSZ = %-10u  Collisions = %-8u   %ld\n", hashsz, hash_collisions, time_taken);
 			min_time_taken = time_taken;
 		}
-	}
+
+#if 0
+		if (hash_collisions < min_col) {
+			min_col = hash_collisions;
+			printf("HASHSZ = %-10u  Collisions = %-8u   %ld\n", hashsz, hash_collisions, time_taken);
+		}
+#endif
+//	}
 	return 0;
 } // main

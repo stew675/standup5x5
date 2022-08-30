@@ -1,4 +1,4 @@
-#define	HASHSZ            33350		// An effective value for (key % HASHSZ)
+#define	HASHSZ            30383		// Emperically derived optimum
 #define READ_CHUNK        10240		// Appears to be optimum
 #define MAX_READERS          15    	// Virtual systems don't like too many readers
 
@@ -13,7 +13,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 
 // We add 1024 here to MAX_WORDS to give us extra space to perform vector
 // alignments for the AVX functions.  At the very least the keys array must
-// be 32-byte aligned, but we align it to a typical system page boundary
+// be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
