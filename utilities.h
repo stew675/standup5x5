@@ -1,4 +1,4 @@
-#define	HASHSZ            94363		// Empirically derived optimum for (key % HASHSZ)
+#define	HASHSZ            33350		// An effective value for (key % HASHSZ)
 #define READ_CHUNK        10240		// Appears to be optimum
 #define MAX_READERS          15    	// Virtual systems don't like too many readers
 
