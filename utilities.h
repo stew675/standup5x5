@@ -1,6 +1,6 @@
 #define	HASHSZ            30383		// Emperically derived optimum
 #define READ_CHUNK        10240		// Appears to be optimum
-#define MAX_READERS          15    	// Virtual systems don't like too many readers
+#define MAX_READERS          14    	// Virtual systems don't like too many readers
 
 // Key Hash Entries
 // We keep keys and positions in separate array because faster to initialise
@@ -197,9 +197,6 @@ find_words(register char *s, register char *e, uint32_t rn)
 	}
 } // find_words
 
-static int num_readers = 0;
-static int num_workers = 1;	// Main thread is a worker too
-
 void
 file_reader(struct worker *work)
 {
@@ -231,6 +228,8 @@ file_reader(struct worker *work)
 
 	atomic_fetch_add(&readers_done, 1);
 } // file_reader
+
+static int num_readers = 0;
 
 uint64_t
 process_words()
@@ -278,7 +277,6 @@ process_words()
 	return spins;
 } // process_words
 
-atomic_int finish_order = 0;
 volatile int go_solve = 0;
 static void solve_work();
 
@@ -303,13 +301,11 @@ work_pool(void *arg)
 	if (worker_num < num_readers)
 		file_reader(work);
 
-	if (atomic_fetch_add(&finish_order, 1) == 0) {
-		// We're the first thread to finish reading.
-		// Spawn the rest of the worker threads
-		pthread_t tid[1];
-		for (int i = num_workers; i < nthreads; i++)
+	if (worker_num == num_readers)
+		for (int i = worker_num + 1; i < nthreads; i++) {
+			pthread_t tid[1];
 			pthread_create(tid, NULL, work_pool, workers + i);
-	}
+		}
 	
 	// Not gonna lie.  This is ugly.  We're busy-waiting until we get
 	// told to start solving.  It shouldn't be for too long though...
@@ -350,18 +346,16 @@ spawn_readers(char *start, size_t len)
 		memset(wordkeys, 0, sizeof(wordkeys));
 
 		// Spawn reader threads
-		num_workers = num_readers;	// Main thread is a worker too
 		for (int i = 1; i < num_readers; i++)
 			pthread_create(tid, NULL, work_pool, workers + i);
 
-		if (num_readers > 2)
+		if (num_readers > 3)
 			main_must_read = 0;
-	} else if (nthreads > 1) {
-		// Start the spawn of worker threads
-		// Remember, the main thread is a worker too
-		num_workers = 2;
-		pthread_create(tid, NULL, work_pool, workers + 1);
 	}
+
+	// Spawn a thread that will create the rest of the worker threads
+	if (num_readers < nthreads)
+		pthread_create(tid, NULL, work_pool, workers + num_readers);
 
 	// Check if main thread must do reading
 	if (main_must_read)
