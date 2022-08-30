@@ -1,12 +1,11 @@
-#define	HASHSZ            39009
-#define READ_CHUNK        10240
-#define MAX_READERS          16    // Virtual systems don't like too many readers
+#define	HASHSZ            94363		// Empirically derived optimum for (key % HASHSZ)
+#define READ_CHUNK        10240		// Appears to be optimum
+#define MAX_READERS          15    	// Virtual systems don't like too many readers
 
-// Word Hash Entries
-static struct wordhash {
-	uint32_t	key;
-	uint32_t	pos;
-} hashmap[HASHSZ] __attribute__ ((aligned(64)));
+// Key Hash Entries
+// We keep keys and positions in separate array because faster to initialise
+uint32_t keymap[HASHSZ] __attribute__ ((aligned(64)));
+uint32_t posmap[HASHSZ] __attribute__ ((aligned(64)));
 
 // Allow for up to 3x the number of unique non-anagram words
 static char     words[MAX_WORDS * 15] __attribute__ ((aligned(64)));
@@ -16,7 +15,11 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to a typical system page boundary
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-static uint32_t cf[MAX_READERS][26] __attribute__ ((aligned(64))) = {0};
+
+// Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
+// alignment, this ensures all counters for each reader exist fully in 2 cache
+// lines independent to each reader, thereby minimising CPU cache contention
+static uint32_t cf[MAX_READERS][32] __attribute__ ((aligned(64))) = {0};
 
 void
 print_time_taken(char *label, struct timespec *ts, struct timespec *te)
@@ -42,7 +45,7 @@ frq_init()
 static void
 hash_init()
 {
-	memset(hashmap, 0, sizeof(hashmap));
+	memset(keymap, 0, sizeof(keymap));
 } // hash_init
 
 
@@ -90,39 +93,34 @@ calc_key(register const char *wd)
 
 // A very simple for-purpose hash map implementation.  Used to
 // lookup words given the key representation of that word
-#define key_hash(x)	((((size_t)x) << 26) % HASHSZ)
+#define key_hash(x)	(x % HASHSZ)
 uint32_t
 hash_insert(register uint32_t key, register uint32_t pos)
 {
-	register struct wordhash *h = hashmap + key_hash(key);
-	register struct wordhash *e = hashmap + HASHSZ;
-	register uint32_t col = 0;
+	register uint32_t col = 0, hashpos = key_hash(key);
 
 	do {
-		// Check if duplicate key
-		if (h->key == key)
-			return 0;
-
 		// Check if we can insert at this position
-		if (h->key == 0)
+		if (keymap[hashpos] == 0)
 			break;
 
-		col++;
-		h++;
+		// Check if duplicate key
+		if (keymap[hashpos] == key)
+			return 0;
 
 		// Handle full hash table condition
-		if (col == HASHSZ)
-			assert(col < HASHSZ);
+		if (++col == HASHSZ)
+			return 0;
 
-		if (h == e)
-			h -= HASHSZ;
+		if (++hashpos == HASHSZ)
+			hashpos -= HASHSZ;
 	} while (1);
 
-	hash_collisions += col;
-
 	// Now insert at hash location
-	h->key = key;
-	h->pos = pos;
+	keymap[hashpos] = key;
+	posmap[hashpos] = pos * 5;
+
+	hash_collisions += col;
 
 	return key;
 } // hash_insert
@@ -130,31 +128,28 @@ hash_insert(register uint32_t key, register uint32_t pos)
 const char *
 hash_lookup(register uint32_t key, register const char *wp)
 {
-	register struct wordhash *h = hashmap + key_hash(key);
-	register struct wordhash *e = hashmap + HASHSZ;
-	register uint32_t col = 0;
-	do {
-		// Check the not-in-hash scenario
-		if (h->key == 0)
-			return NULL;
+	register uint32_t col = 0, hashpos = key_hash(key);
 
-		// Check if entry matches the key
-		if (h->key == key)
+	do {
+		// Check for a match
+		if (keymap[hashpos] == key)
 			break;
 
-		col++;
-		h++;
+		// Check the not-in-hash scenario
+		if (keymap[hashpos] == 0)
+			return NULL;
 
 		// Handle full hash table condition
-		if (col == HASHSZ)
-			assert(col < HASHSZ);
+		if (++col == HASHSZ)
+			return NULL;
 
-		if (h == e)
-			h -= HASHSZ;
+		if (++hashpos == HASHSZ)
+			hashpos -= HASHSZ;
 	} while (1);
 
 	hash_collisions += col;
-	return wp + (h->pos * 5);
+
+	return wp + posmap[hashpos];
 } // hash_lookup
 #undef key_hash
 
@@ -163,7 +158,8 @@ hash_lookup(register uint32_t key, register const char *wp)
 void
 find_words(register char *s, register char *e, uint32_t rn)
 {
-	register char *w, *wp = words, a = 'a', z = 'z', nl = '\n', c;
+	register char a = 'a', z = 'z', nl = '\n', c;
+	register char *wp = words, *to, *w;
 	register uint32_t *ft = cf[rn];
 
 	for (w = s; s < e; w = s) {
@@ -173,30 +169,31 @@ find_words(register char *s, register char *e, uint32_t rn)
 		c = *s++; if ((c < a) || (c > z)) continue;
 		c = *s++; if ((c < a) || (c > z)) continue;
 
-		c = *s++;
-		if ((c < a) || (c > z)) {
+		// We've now found 5 [a..z] characters in a row
+		c = *s++; if ((c < a) || (c > z)) {
 			// Reject words without 5 unique [a..z] characters
 			register uint32_t key = calc_key(w);
 			if (__builtin_popcount(key) == 5) {
 				register int pos = atomic_fetch_add(&num_words, 1);
-				register char *to = wp + (5 * pos);
+
+				// Get the key into the list as soon as possible
+				// to prevent holding up the hash table builder
+				wordkeys[pos] = key;
 
 				// Update frequency table and
 				// copy word at the same time
+				to = wp + (5 * pos);
 				ft[(*to++ = *w++) - a]++;
 				ft[(*to++ = *w++) - a]++;
 				ft[(*to++ = *w++) - a]++;
 				ft[(*to++ = *w++) - a]++;
 				ft[(*to++ = *w++) - a]++;
-
-				wordkeys[pos] = key;
 			}
 		}
 
 		// Just quickly find the next line
-		if (c == nl)
-			continue;
-		while (*s++ != nl);
+		while (c != nl)
+			c = *s++;
 	}
 } // find_words
 
@@ -256,7 +253,6 @@ process_words()
 			if (readers_done < num_readers) {
 				spins++;
 				asm("nop");
-//				usleep(1);
 				continue;
 			}
 			if (pos >= num_words) {
@@ -266,8 +262,10 @@ process_words()
 			}
 		}
 
-		if ((key = wordkeys[pos]) == 0)
-			continue;
+		while ((key = wordkeys[pos]) == 0) {
+			spins++;
+			asm("nop");
+		}
 
 		if (hash_insert(key, pos))
 			*k++ = key;
