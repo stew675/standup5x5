@@ -197,7 +197,6 @@ find_words(register char *s, register char *e, uint32_t rn)
 	}
 } // find_words
 
-struct timespec r1[1] = {0}, r2[1];
 static int num_readers = 0;
 static int num_workers = 1;	// Main thread is a worker too
 
@@ -231,9 +230,6 @@ file_reader(struct worker *work)
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
-
-	if (readers_done == num_readers)
-		clock_gettime(CLOCK_MONOTONIC, r2);
 } // file_reader
 
 uint64_t
@@ -332,9 +328,6 @@ spawn_readers(char *start, size_t len)
 	int main_must_read = 1;
 	char *end = start + len;
 	pthread_t tid[1];
-	struct timespec t1[1], t2[1], t3[1];
-
-	clock_gettime(CLOCK_MONOTONIC, t1);
 
 	num_readers = len / (READ_CHUNK << 3);
 
@@ -356,8 +349,6 @@ spawn_readers(char *start, size_t len)
 		// The main thread doesn't do reading if num_readers > 1
 		memset(wordkeys, 0, sizeof(wordkeys));
 
-		clock_gettime(CLOCK_MONOTONIC, r1);
-
 		// Spawn reader threads
 		num_workers = num_readers;	// Main thread is a worker too
 		for (int i = 1; i < num_readers; i++)
@@ -373,22 +364,13 @@ spawn_readers(char *start, size_t len)
 	}
 
 	// Check if main thread must do reading
-	if (main_must_read) {
-		clock_gettime(CLOCK_MONOTONIC, r1);
+	if (main_must_read)
 		file_reader(workers);
-	} else
+	else
 		atomic_fetch_add(&readers_done, 1);
 
-	clock_gettime(CLOCK_MONOTONIC, t2);
-
 	// The main thread processes the words as the reader threads find them
-	uint64_t spins = process_words();
-
-	clock_gettime(CLOCK_MONOTONIC, t3);
-	print_time_taken("Spawn readers", t1, t2);
-	print_time_taken("Process Words", t2, t3);
-	print_time_taken("File Reader", r1, r2);
-	printf("Spins = %lu\n", spins);
+	process_words();
 } // spawn_readers
 
 // File Reader.  We use mmap() for efficiency for both reading and processing
