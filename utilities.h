@@ -200,6 +200,10 @@ find_words(register char *s, register char *e, uint32_t rn)
 	}
 } // find_words
 
+struct timespec r1[1] = {0}, r2[1];
+static int num_readers = 0;
+static int num_workers = 1;	// Main thread is a worker too
+
 void
 file_reader(struct worker *work)
 {
@@ -230,16 +234,18 @@ file_reader(struct worker *work)
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
-} // file_reader
 
-static int num_readers = 0;
-static int num_workers = 1;	// Main thread is a worker too
+	if (readers_done == num_readers)
+		clock_gettime(CLOCK_MONOTONIC, r2);
+} // file_reader
 
 void
 process_words()
 {
 	register uint32_t spins = 0;
+	struct timespec t1[1], t2[1];
 
+	clock_gettime(CLOCK_MONOTONIC, t1);
 	// We do hash_init() and frq_init() here after the reader threads
 	// start. This speeds up application load time as the OS needs to
 	// clear less memory on startup.  Also, by initialising here, we
@@ -251,7 +257,8 @@ process_words()
 		if (pos >= num_words) {
 			if (readers_done < num_readers) {
 				spins++;
-				usleep(1);
+				asm("nop");
+//				usleep(1);
 				continue;
 			}
 			if (pos >= num_words) {
@@ -275,6 +282,10 @@ process_words()
 	for (int c = 0; c < 26; c++)
 		for (int r = 0; r < num_readers; r++)
 			frq[c].f += cf[r][c];
+
+	clock_gettime(CLOCK_MONOTONIC, t2);
+	print_time_taken("Process Words", t1, t2);
+	printf("Spins = %u\n", spins);
 } // process_words
 
 atomic_int finish_order = 0;
@@ -327,6 +338,9 @@ spawn_readers(char *start, size_t len)
 	int main_must_read = 1;
 	char *end = start + len;
 	pthread_t tid[1];
+	struct timespec t1[1], t2[1];
+
+	clock_gettime(CLOCK_MONOTONIC, t1);
 
 	num_readers = len / (READ_CHUNK << 3);
 
@@ -348,6 +362,8 @@ spawn_readers(char *start, size_t len)
 		// The main thread doesn't do reading if num_readers > 1
 		memset(wordkeys, 0, sizeof(wordkeys));
 
+		clock_gettime(CLOCK_MONOTONIC, r1);
+
 		// Spawn reader threads
 		num_workers = num_readers;	// Main thread is a worker too
 		for (int i = 1; i < num_readers; i++)
@@ -363,13 +379,19 @@ spawn_readers(char *start, size_t len)
 	}
 
 	// Check if main thread must do reading
-	if (main_must_read)
+	if (main_must_read) {
+		clock_gettime(CLOCK_MONOTONIC, r1);
 		file_reader(workers);
-	else
+	} else
 		atomic_fetch_add(&readers_done, 1);
+
+	clock_gettime(CLOCK_MONOTONIC, t2);
+	print_time_taken("Spawn readers", t1, t2);
 
 	// The main thread processes the words as the reader threads find them
 	process_words();
+
+	print_time_taken("File Reader", r1, r2);
 } // spawn_readers
 
 // File Reader.  We use mmap() for efficiency for both reading and processing
