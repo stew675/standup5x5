@@ -161,7 +161,6 @@ process_five_word(register char *w, register uint32_t *ft)
 	register uint32_t key = calc_key(w);
 	if (__builtin_popcount(key) == 5) {
 		register int pos = atomic_fetch_add(&num_words, 1);
-		register char a = 'a';
 
 		// Get the key into the list as soon as possible
 		// to prevent holding up the hash table builder
@@ -169,12 +168,13 @@ process_five_word(register char *w, register uint32_t *ft)
 
 		// Update frequency table and
 		// copy word at the same time
+		register char a = 'a';
 		register char *to = words + (5 * pos);
 		ft[(*to++ = *w++) - a]++;
 		ft[(*to++ = *w++) - a]++;
 		ft[(*to++ = *w++) - a]++;
 		ft[(*to++ = *w++) - a]++;
-		ft[(*to++ = *w++) - a]++;
+		ft[(*to   = *w  ) - a]++;
 	}
 } // process_five_word
 
@@ -204,6 +204,8 @@ find_words(register char *s, register char *e, uint32_t rn)
 
 	e -= 32;
 	while (s < e) {
+		register int pos = 0;
+
 		// Unaligned load of a vector with the next 32 characters
 		__m256i wvec = _mm256_loadu_si256((const __m256i_u *)s);
 
@@ -226,19 +228,15 @@ find_words(register char *s, register char *e, uint32_t rn)
 		}
 
 		// Process all complete words in the vector
-		for (register int i = 0; i < nls; i++) {
-			// Find distance to next word
-			register int nw = __builtin_ctz(nmask) + 1;
-
+		while (nls--) {
 			// Process word if it has exactly 5 letters
-			if (__builtin_ctz(wmask) == 5)
-				process_five_word(s, ft);
+			if (__builtin_ctz(wmask >> pos) == 5)
+				process_five_word(s + pos, ft);
 
-			// Advance to next word
-			nmask >>= nw;
-			wmask >>= nw;
-			s += nw;
+			// Get position of next word
+			pos += (__builtin_ctz(nmask >> pos) + 1);
 		}
+		s += pos;
 	}
 	e += 32;
 #endif
