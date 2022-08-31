@@ -1,6 +1,5 @@
 #define	HASHSZ            30383		// Emperically derived optimum
-#define READ_CHUNK        10240		// Appears to be optimum
-#define MAX_READERS          14    	// Virtual systems don't like too many readers
+#define MAX_READERS          15    	// Virtual systems don't like too many readers
 
 // Key Hash Entries
 // We keep keys and positions in separate array because faster to initialise
@@ -155,13 +154,96 @@ hash_lookup(register uint32_t key, register const char *wp)
 
 
 // ********************* FILE READER ********************
+
+void
+process_five_word(register char *w, register uint32_t *ft)
+{
+	register uint32_t key = calc_key(w);
+	if (__builtin_popcount(key) == 5) {
+		register int pos = atomic_fetch_add(&num_words, 1);
+		register char a = 'a';
+
+		// Get the key into the list as soon as possible
+		// to prevent holding up the hash table builder
+		wordkeys[pos] = key;
+
+		// Update frequency table and
+		// copy word at the same time
+		register char *to = words + (5 * pos);
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to++ = *w++) - a]++;
+	}
+} // process_five_word
+
+// Because of setup overheads, AVX2 Scanning
+// benefits from larger read chunk sizes
+
+#ifdef USE_AVX2_SCAN
+#define READ_CHUNK        32768		// Appears to be optimum
+#else
+#define READ_CHUNK        10240		// Appears to be optimum
+#endif
+
 void
 find_words(register char *s, register char *e, uint32_t rn)
 {
-	register char a = 'a', z = 'z', nl = '\n', c;
-	register char *wp = words, *to, *w;
+	register char a = 'a', z = 'z', nl = '\n';
 	register uint32_t *ft = cf[rn];
 
+#ifdef USE_AVX2_SCAN
+	// The following code makes the assumption that all
+	// words will immediately follow a newline character
+
+	// Prepare 3 constant vectors with newlines, a's and z's
+	__m256i nvec = _mm256_set1_epi8(nl);
+	__m256i avec = _mm256_set1_epi8(a);
+	__m256i zvec = _mm256_set1_epi8(z);
+
+	e -= 32;
+	while (s < e) {
+		// Unaligned load of a vector with the next 32 characters
+		__m256i wvec = _mm256_loadu_si256((const __m256i_u *)s);
+
+		// Find the newlines in the word vector
+		__m256i nres = _mm256_cmpeq_epi8(nvec, wvec);
+		register uint32_t nmask = _mm256_movemask_epi8(nres);
+
+		// Find the lower-case letters in the word vector
+		__m256i wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec),
+					       _mm256_cmpgt_epi8(wvec, zvec));
+		register uint32_t wmask = _mm256_movemask_epi8(wres);
+
+		// Get number of newlines in the vector
+		register int nls = __builtin_popcount(nmask);
+
+		// Handle words over 32 characters in length
+		if (nls == 0) {
+			for (s += 32; s < e && *s++ != nl; );
+			continue;
+		}
+
+		// Process all complete words in the vector
+		for (register int i = 0; i < nls; i++) {
+			// Find distance to next word
+			register int nw = __builtin_ctz(nmask) + 1;
+
+			// Process word if it has exactly 5 letters
+			if (__builtin_ctz(wmask) == 5)
+				process_five_word(s, ft);
+
+			// Advance to next word
+			nmask >>= nw;
+			wmask >>= nw;
+			s += nw;
+		}
+	}
+	e += 32;
+#endif
+
+	register char c, *w;
 	for (w = s; s < e; w = s) {
 		c = *s++; if ((c < a) || (c > z)) continue;
 		c = *s++; if ((c < a) || (c > z)) continue;
@@ -170,26 +252,8 @@ find_words(register char *s, register char *e, uint32_t rn)
 		c = *s++; if ((c < a) || (c > z)) continue;
 
 		// We've now found 5 [a..z] characters in a row
-		c = *s++; if ((c < a) || (c > z)) {
-			// Reject words without 5 unique [a..z] characters
-			register uint32_t key = calc_key(w);
-			if (__builtin_popcount(key) == 5) {
-				register int pos = atomic_fetch_add(&num_words, 1);
-
-				// Get the key into the list as soon as possible
-				// to prevent holding up the hash table builder
-				wordkeys[pos] = key;
-
-				// Update frequency table and
-				// copy word at the same time
-				to = wp + (5 * pos);
-				ft[(*to++ = *w++) - a]++;
-				ft[(*to++ = *w++) - a]++;
-				ft[(*to++ = *w++) - a]++;
-				ft[(*to++ = *w++) - a]++;
-				ft[(*to++ = *w++) - a]++;
-			}
-		}
+		c = *s++; if ((c < a) || (c > z)) 
+			process_five_word(w, ft);
 
 		// Just quickly find the next line
 		while (c != nl)

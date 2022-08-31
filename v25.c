@@ -18,6 +18,8 @@
 #include <stdatomic.h>
 #include <immintrin.h>
 
+#define USE_AVX2_SCAN
+
 #define	MAX_SOLUTIONS	8192
 #define	MAX_WORDS	8192
 #define	MAX_THREADS	  24
