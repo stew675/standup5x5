@@ -39,6 +39,8 @@ static struct frequency {
 	atomic_int pos;		// Position within a set
 } frq[26] __attribute__ ((aligned(64)));
 
+struct frequency tfrq[2][26] __attribute__ ((aligned(64)));
+
 // Keep frequently modified atomic variables on their own CPU cache line
 atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
 atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
@@ -57,6 +59,8 @@ static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
 #include "utilities.h"
 
+uint32_t tm;
+
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning
 // the remainder and so on until all keys have been assigned to sets
@@ -69,37 +73,39 @@ setup_frequency_sets()
 	register uint32_t *kp = keys;
 
 	qsort(f, 26, sizeof(*f), by_frequency_lo);
+	tm = frq[25].m;
 
 	// Now set up our scan sets by lowest frequency to highest
-	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask, *ks, key;
+	for (int t = 0; t < 2; t++) {
+		memcpy(tfrq[0], frq, sizeof(frq));
 
-		if (i == 7)
-			rescan_frequencies(i, kp);
+		for (int i = 0; i < 26; i++, f++) {
+			register uint32_t mask, *ks, key;
 
-		mask = f->m;
-		f->s = kp;
-		for (ks = kp; (key = *ks); ks++) {
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
+			mask = f->m | (tm * t);
+			f->s = kp;
+			for (ks = kp; (key = *ks); ks++) {
+				if (key & mask) {
+					*ks = *kp;
+					*kp++ = key;
+				}
 			}
+			f->e = kp;
+
+			register uint32_t nfk = kp - f->s;
+			f->l = nfk;
+
+			// Update the min_search_depth if needed
+			if (nfk > 0)
+				min_search_depth = i - 3;
+
+			// 0-terminate this frequency key set
+			*ks++ = *kp;
+			*kp++ = 0;
+
+			// Ensure key set is 0 terminated for next loop
+			*ks = 0;
 		}
-		f->e = kp;
-
-		register uint32_t nfk = kp - f->s;
-		f->l = nfk;
-
-		// Update the min_search_depth if needed
-		if (nfk > 0)
-			min_search_depth = i - 3;
-
-		// 0-terminate this frequency key set
-		*ks++ = *kp;
-		*kp++ = 0;
-
-		// Ensure key set is 0 terminated for next loop
-		*ks = 0;
 	}
 } // setup_frequency_sets
 
