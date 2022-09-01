@@ -31,15 +31,14 @@ static struct worker {
 
 // Character frequency recording
 static struct frequency {
-	uint32_t  *s;		// Pointer to set
-	uint32_t  *e;		// Pointer to end of set
+	uint32_t  *s __attribute__ ((aligned(64)));	// Pointer to set
 	uint32_t   m;		// Mask (1 << (c - 'a'))
+	uint32_t  to;		// Offset of start of tiered set
+	uint32_t  tm;		// Tiered mask
 	int32_t    f;		// Frequency
 	int32_t    l;		// Length of set
 	atomic_int pos;		// Position within a set
 } frq[26] __attribute__ ((aligned(64)));
-
-struct frequency tfrq[2][26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
 atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
@@ -59,8 +58,6 @@ static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
 #include "utilities.h"
 
-uint32_t tm;
-
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning
 // the remainder and so on until all keys have been assigned to sets
@@ -70,42 +67,52 @@ void
 setup_frequency_sets()
 {
 	register struct frequency *f = frq;
-	register uint32_t *kp = keys;
+	register uint32_t *kp = keys, tm;
 
 	qsort(f, 26, sizeof(*f), by_frequency_lo);
 	tm = frq[25].m;
 
-	// Now set up our scan sets by lowest frequency to highest
-	for (int t = 0; t < 2; t++) {
-		memcpy(tfrq[0], frq, sizeof(frq));
+	for (int i = 0; i < 26; i++, f++) {
+		register uint32_t mask = f->m, *ks, key;
 
-		for (int i = 0; i < 26; i++, f++) {
-			register uint32_t mask, *ks, key;
-
-			mask = f->m | (tm * t);
-			f->s = kp;
-			for (ks = kp; (key = *ks); ks++) {
-				if (key & mask) {
-					*ks = *kp;
-					*kp++ = key;
-				}
+		f->tm = tm;
+		f->s = kp;
+		for (ks = kp; (key = *ks); ks++) {
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
 			}
-			f->e = kp;
-
-			register uint32_t nfk = kp - f->s;
-			f->l = nfk;
-
-			// Update the min_search_depth if needed
-			if (nfk > 0)
-				min_search_depth = i - 3;
-
-			// 0-terminate this frequency key set
-			*ks++ = *kp;
-			*kp++ = 0;
-
-			// Ensure key set is 0 terminated for next loop
-			*ks = 0;
 		}
+
+		register uint32_t nfk = kp - f->s;
+		f->l = nfk;
+
+		// Update the min_search_depth if needed
+		if (nfk > 0)
+			min_search_depth = i - 3;
+
+		// 0-terminate this frequency key set
+		*ks++ = *kp;
+		*kp++ = 0;
+
+		// Ensure key set is 0 terminated for next loop
+		*ks = 0;
+	}
+
+	// Now organise each set into that which
+	// has tm followed by that which does not
+	f = frq;
+	for (int i = 0; i < 26; i++, f++) {
+		register uint32_t mask = f->tm, *ks, key;
+
+		kp = f->s;
+		for (ks = kp; (key = *ks); ks++) {
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->to = kp - f->s;
 	}
 } // setup_frequency_sets
 
@@ -139,15 +146,19 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		return add_solution(solution);
 	mask |= key;
 
-	register struct frequency *e = frq + min_search_depth + depth;
+	register struct frequency *e = frq + (min_search_depth + depth);
 	for (; f < e; f++) {
 		if (mask & f->m)
 			continue;
-		for (register uint32_t *set = f->s; (key = *set++);)
+
+		register uint32_t *set = f->s + ((!!(mask & f->tm)) * f->to);
+		for ( ; (key = *set++);)
 			if (!(mask & key))
 				find_solutions(depth + 1, f + 1, solution, mask, key, skipped);
+
 		if (skipped)
 			return;
+
 		skipped = 1;
 	}
 } // find_solutions
