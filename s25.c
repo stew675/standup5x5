@@ -31,7 +31,7 @@ static struct worker {
 
 // Character frequency recording
 static struct frequency {
-	uint32_t  *s __attribute__ ((aligned(64)));	// Pointer to set
+	uint32_t  *s;		// Pointer to set
 	uint32_t   m;		// Mask (1 << (c - 'a'))
 	uint32_t  to;		// Offset of start of tiered set
 	uint32_t  tm;		// Tiered mask
@@ -78,8 +78,8 @@ setup_frequency_sets()
 		if (i == 6)
 			rescan_frequencies(i, kp);
 
-		mask = f->m;
 		f->tm = tm;
+		mask = f->m;
 		f->s = kp;
 		for (ks = kp; (key = *ks); ks++) {
 			if (key & mask) {
@@ -274,7 +274,7 @@ main(int argc, char *argv[])
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length = %d\n", c, frq[i].l);
+		printf("%c set_length = %5d     tiered_offset = %5d\n", c, frq[i].l, frq[i].to);
 	}
 	printf("\n\n");
 

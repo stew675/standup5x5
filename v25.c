@@ -35,11 +35,14 @@ static struct worker {
 // Character frequency recording
 static struct frequency {
 	uint32_t  *s;		// Pointer to set
-	struct frequency *e;	// Min Frequency Depth
+	struct frequency *e;	// Pointer min_search_depth set
 	uint32_t   m;		// Mask (1 << (c - 'a'))
+	uint32_t  to;		// Tiered Offset
+	uint32_t  tm;		// Tiered Mask
 	int32_t    f;		// Frequency
 	int32_t    l;		// Length of set
 	atomic_int pos;		// Position within a set
+	int32_t	pad[6];		// Pad to 64 bytes
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -70,9 +73,10 @@ void
 setup_frequency_sets()
 {
 	register struct frequency *f = frq;
-	register uint32_t *kp = keys;
+	register uint32_t *kp = keys, tm;
 
 	qsort(f, 26, sizeof(*f), by_frequency_lo);
+	tm = frq[25].m;
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
@@ -81,6 +85,7 @@ setup_frequency_sets()
 		if (i == 7)
 			rescan_frequencies(i, kp);
 
+		f->tm = tm;
 		mask = f->m;
 		f->s = kp;
 		for (ks = kp; (key = *ks); ks++) {
@@ -108,6 +113,28 @@ setup_frequency_sets()
 	}
 	for (int i = 0; i < 26; i++)
 		frq[i].e = frq + min_search_depth;
+
+	// Now organise each set into that which
+	// has tm followed by that which does not
+	f = frq;
+	for (int i = 0; i < 26; i++, f++) {
+		register uint32_t mask = f->tm, *ks, key;
+
+		kp = f->s;
+		register uint32_t *end = f->s + f->l;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->to = kp - f->s;
+		f->to -= (f->to % 8);		// Align the offset for AVX
+
+		if (f->m == f->tm)
+			break;
+	}
 } // setup_frequency_sets
 
 
@@ -152,7 +179,9 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 	for (register struct frequency *e = f->e + depth; f < e; f++) {
 		if (mask & f->m)
 			continue;
-		for (register uint32_t *set = f->s, *end = f->s + f->l; set < end; set += 8) {
+
+		register uint32_t *set = f->s + f->to * (!!(mask & f->tm));;
+		for (register uint32_t *end = f->s + f->l; set < end; set += 8) {
 			register uint32_t vresmask = vscan(mask, set);
 			while (vresmask) {
 				register int i = __builtin_ctz(vresmask);
@@ -198,7 +227,6 @@ solve()
 	// Wait for all solver threads to finish up
 	while(solvers_done < nthreads)
 		asm("nop");
-//		usleep(1);
 } // solve
 
 
@@ -277,7 +305,7 @@ main(int argc, char *argv[])
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length = %d\n", c, frq[i].l);
+		printf("%c set_length = %5d      tiered_offset = %5d\n", c, frq[i].l, frq[i].to);
 	}
 	printf("\n\n");
 
