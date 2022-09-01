@@ -33,11 +33,15 @@ static struct worker {
 static struct frequency {
 	uint32_t  *s;		// Pointer to set
 	uint32_t   m;		// Mask (1 << (c - 'a'))
-	uint32_t  to;		// Offset of start of tiered set
-	uint32_t  tm;		// Tiered mask
+	uint32_t  tm1;		// Tier 1 Mask
+	uint32_t  tm2;		// Tier 2 Mask
+	uint32_t  toff1;	// Tier offset 1
+	uint32_t  toff2;	// Tier offset 2
+	uint32_t  toff3;	// Tier offset 3
 	int32_t    f;		// Frequency
 	int32_t    l;		// Length of set
 	atomic_int pos;		// Position within a set
+	uint32_t  pad[5];	// Pad to 64 bytes
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -67,18 +71,23 @@ void
 setup_frequency_sets()
 {
 	register struct frequency *f = frq;
-	register uint32_t *kp = keys, tm;
+	register uint32_t *kp = keys, tm1, tm2;
 
 	qsort(f, 26, sizeof(*f), by_frequency_lo);
-	tm = frq[25].m;
+	tm1 = frq[25].m;
+	tm2 = frq[24].m;
 
+	// Split full keyset into sets organised by the
+	// least frequently occurring letter to the most
 	for (int i = 0; i < 26; i++, f++) {
 		register uint32_t mask, *ks, key;
 
-		if (i == 6)
+		if (i == 7)
 			rescan_frequencies(i, kp);
 
-		f->tm = tm;
+		f->tm1 = tm1;
+		f->tm2 = tm2;
+
 		mask = f->m;
 		f->s = kp;
 		for (ks = kp; (key = *ks); ks++) {
@@ -103,20 +112,53 @@ setup_frequency_sets()
 		*ks = 0;
 	}
 
-	// Now organise each set into that which
-	// has tm followed by that which does not
+	// Now organise each set into 2 subsets, that which
+	// has tm1 followed by that which does not
 	f = frq;
 	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask = f->tm, *ks, key;
+		register uint32_t mask = f->tm1, *ks, key, *end;
 
 		kp = f->s;
-		for (ks = kp; (key = *ks); ks++) {
+		end = f->s + f->l;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
 			if (key & mask) {
 				*ks = *kp;
 				*kp++ = key;
 			}
 		}
-		f->to = kp - f->s;
+		f->toff2 = kp - f->s;
+
+		// Now organise each first subset into that which
+		// has tm2 followed by that which does not, and
+		// then each second subset into that which does
+		// not have tm2 followed by that which does
+
+		mask = f->tm2;
+
+		// First Subset has tm2 then not
+		kp = f->s;
+		end = f->s + f->toff2;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->toff1 = kp - f->s;
+
+		// Second Subset does not have tm2 then has
+		kp = f->s + f->toff2;
+		end = f->s + f->l;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (!(key & mask)) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->toff3 = kp - f->s;
 	}
 } // setup_frequency_sets
 
@@ -155,9 +197,23 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		if (mask & f->m)
 			continue;
 
-		register uint32_t *set = f->s + ((!!(mask & f->tm)) * f->to);
-		for ( ; (key = *set++);)
-			if (!(mask & key))
+//		set = f->s + (!!(mask & f->tm1)) * f->toff[2];
+		register uint32_t *set = f->s, *end;
+
+		if (mask & f->tm2) {
+			end = set + f->toff3;
+			if (mask & f->tm1)
+				set += f->toff2;
+			else
+				set += f->toff1;
+		} else {
+			end = set + f->l;
+			if (mask & f->tm1)
+				set += f->toff2;
+		}
+
+		while (set < end)
+			if (!((key = *set++) & mask))
 				find_solutions(depth + 1, f + 1, solution, mask, key, skipped);
 
 		if (skipped)
@@ -274,7 +330,8 @@ main(int argc, char *argv[])
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length = %5d     tiered_offset = %5d\n", c, frq[i].l, frq[i].to);
+		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
+			c, frq[i].l, frq[i].toff1, frq[i].toff2, frq[i].toff3);
 	}
 	printf("\n\n");
 
