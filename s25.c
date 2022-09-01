@@ -197,20 +197,17 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		if (mask & f->m)
 			continue;
 
-//		set = f->s + (!!(mask & f->tm1)) * f->toff[2];
-		register uint32_t *set = f->s, *end;
+		// Determine the values for set and end
+		// The !! means we end up with only 0 or 1
+		register int mt1 = !!(mask & f->tm1);
+		register int mt2 = !!(mask & f->tm2);
 
-		if (mask & f->tm2) {
-			end = set + f->toff3;
-			if (mask & f->tm1)
-				set += f->toff2;
-			else
-				set += f->toff1;
-		} else {
-			end = set + f->l;
-			if (mask & f->tm1)
-				set += f->toff2;
-		}
+		// A branchless calculation of end
+		register uint32_t *end = f->s + (mt2 * f->toff3) + (!mt2 * f->l);
+
+		// A branchless calculation of set
+		mt2 &= !mt1;
+		register uint32_t *set = f->s + ((mt1 & !mt2) * f->toff2) + (mt2 * f->toff1);
 
 		while (set < end)
 			if (!((key = *set++) & mask))
