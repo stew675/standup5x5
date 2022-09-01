@@ -73,8 +73,12 @@ setup_frequency_sets()
 	tm = frq[25].m;
 
 	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask = f->m, *ks, key;
+		register uint32_t mask, *ks, key;
 
+		if (i == 6)
+			rescan_frequencies(i, kp);
+
+		mask = f->m;
 		f->tm = tm;
 		f->s = kp;
 		for (ks = kp; (key = *ks); ks++) {
