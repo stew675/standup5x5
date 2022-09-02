@@ -39,11 +39,16 @@ static struct worker {
 // Character frequency recording
 static struct frequency {
 	uint32_t  *s;		// Pointer to set
-	uint32_t  *e;		// Pointer to end of set
 	uint32_t   m;		// Mask (1 << (c - 'a'))
-	int32_t    f;		// Frequency
+	uint32_t   tm1;		// Tiered Mask 1
+	uint32_t   tm2;		// Tiered Mask 2
+	uint32_t   toff1;	// Tiered Offset 1
+	uint32_t   toff2;	// Tiered Offset 2
+	uint32_t   toff3;	// Tiered Offset 3
 	int32_t    l;		// Length of set
+	int32_t    f;		// Frequency
 	atomic_int pos;		// Position within a set
+	uint32_t   pad[5];	// Pad to 64 bytes
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -64,56 +69,6 @@ static uint32_t hash_collisions = 0;
 static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
 #include "utilities.h"
-
-// The role of this function is to re-arrange the key set according to all
-// words containing the least frequently used letter, and then scanning
-// the remainder and so on until all keys have been assigned to sets
-// It achieves this by swapping keys in the key set, and inserting values
-// to ensure each set is properly aligned for vectorized scanning
-void
-setup_frequency_sets()
-{
-	register struct frequency *f = frq;
-	register uint32_t *kp = keys;
-
-	qsort(f, 26, sizeof(*f), by_frequency_lo);
-
-	// Now set up our scan sets by lowest frequency to highest
-	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask, *ks, key;
-
-		if (i == 7)
-			rescan_frequencies(i, kp);
-
-		mask = f->m;
-		f->s = kp;
-		for (ks = kp; (key = *ks); ks++) {
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		f->e = kp;
-
-		register uint32_t nfk = kp - f->s;
-		f->l = nfk;
-
-		// Update the min_search_depth if needed
-		if (nfk > 0)
-			min_search_depth = i - 3;
-
-		// Ensure 32-byte alignments for the set
-		// We "poison" the alignment values with all bits set
-		while ((nfk++ % 16)) {
-			*ks++ = *kp;
-			*kp++ = (uint32_t)(~0);
-		}
-
-		// Ensure key set is 0 terminated for next loop
-		*ks = 0;
-	}
-} // setup_frequency_sets
-
 
 // ********************* SOLVER ALGORITHM ********************
 
@@ -137,14 +92,14 @@ static inline uint16_t
 vscan(register uint32_t mask, register uint32_t *set)
 {
 	__m512i vmask = _mm512_set1_epi32(mask);
-	__m512i vkeys = _mm512_load_si512((__m256i *)set);
+	__m512i vkeys = _mm512_loadu_si512((__m256i *)set);
 	return (uint16_t) _mm512_cmpeq_epi32_mask(_mm512_and_si512(vmask, vkeys), _mm512_setzero_si512());
 } // vscan
 
 // find_solutions() which is the busiest loop is thereby
 // kept as small and tight as possible for the most speed
 void
-find_solutions(register int depth, register int setnum, register uint32_t mask,
+find_solutions(register int depth, register struct frequency *f, register uint32_t mask,
 		register int skipped, register uint32_t *solution, register uint32_t key)
 {
 	solution[depth] = key;
@@ -153,17 +108,29 @@ find_solutions(register int depth, register int setnum, register uint32_t mask,
 	mask |= key;
 
 	// Keep these loops tight!
-	register int e = min_search_depth + depth;
-	register uint32_t *set, *end;
-	for (; setnum < e; setnum++) {
-		if (mask & frq[setnum].m)
+	register struct frequency *e = frq + (min_search_depth + depth);
+
+	for (; f < e; f++) {
+		if (mask & f->m)
 			continue;
-		set = frq[setnum].s;
-		for (end = frq[setnum].e; set < end; set += 16) {
+
+		// Determine the values for set and end
+		// The !! means we end up with only 0 or 1
+		register int mt1 = !!(mask & f->tm1);
+		register int mt2 = !!(mask & f->tm2);
+
+		// A branchless calculation of end
+		register uint32_t *end = f->s + (mt2 * f->toff3) + (!mt2 * f->l);
+
+		// A branchless calculation of set
+		mt2 &= !mt1;
+		register uint32_t *set = f->s + ((mt1 & !mt2) * f->toff2) + (mt2 * f->toff1);
+
+		for (; set < end; set += 16) {
 			register uint16_t vresmask = vscan(mask, set);
 			while (vresmask) {
 				register int i = ctz(vresmask);
-				find_solutions(depth + 1, setnum + 1, mask, skipped, solution, set[i]);
+				find_solutions(depth + 1, f + 1, mask, skipped, solution, set[i]);
 				vresmask ^= ((uint16_t)1 << i);
 			}
 		}
@@ -173,28 +140,22 @@ find_solutions(register int depth, register int setnum, register uint32_t mask,
 	}
 } // find_solutions
 
-// Top level solver
-void
+// Thread driver
+static void
 solve_work()
 {
-	// Initial work solver.  Here we overload the use
-	// of value of setnum as our skipped argument too
-	for (int setnum = 0; setnum < 2; setnum++) {
-		register uint32_t pos, key;
-		uint32_t solution[6];
-		atomic_int *apos = &frq[setnum].pos;
+	uint32_t solution[6] __attribute__((aligned(64)));
+	register struct frequency *f = frq;
+	register int32_t pos;
 
-		do {
-			pos = atomic_fetch_add(apos, 1);
+	// Solve starting with least frequent set
+	while ((pos = atomic_fetch_add(&f->pos, 1)) < f->l)
+		find_solutions(1, f + 1, 0, 0, solution, f->s[pos]);
 
-			if (pos >= frq[setnum].l)
-				break;
-
-			key = frq[setnum].s[pos];
-			solution[0] = key;
-			find_solutions(1, setnum + 1, key, setnum, solution, key);
-		} while (1);
-	}
+	// Solve after skipping least frequent set
+	f++;
+	while ((pos = atomic_fetch_add(&f->pos, 1)) < f->l)
+		find_solutions(1, f + 1, 0, 1, solution, f->s[pos]);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
@@ -271,7 +232,7 @@ main(int argc, char *argv[])
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
 
-	setup_frequency_sets();
+	setup_frequency_sets(16);
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
 
