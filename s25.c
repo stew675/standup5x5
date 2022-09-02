@@ -38,8 +38,8 @@ static struct frequency {
 	uint32_t  toff1;	// Tier offset 1
 	uint32_t  toff2;	// Tier offset 2
 	uint32_t  toff3;	// Tier offset 3
-	int32_t    f;		// Frequency
 	int32_t    l;		// Length of set
+	int32_t    f;		// Frequency
 	atomic_int pos;		// Position within a set
 	uint32_t  pad[5];	// Pad to 64 bytes
 } frq[26] __attribute__ ((aligned(64)));

@@ -465,198 +465,7 @@ read_words(char *path)
 } // read_words
 
 
-// ********************* FREQUENCY HANDLER ********************
-// Sort lowest to highest, but treat 0 values as "infinite"
-int
-by_frequency_lo(const void *a, const void *b)
-{
-	if (((struct frequency *)a)->f == ((struct frequency *)b)->f)
-		return 0;
-	if (((struct frequency *)a)->f == 0)
-		return 1;
-	if (((struct frequency *)b)->f == 0)
-		return -1;
-	return ((struct frequency *)a)->f - ((struct frequency *)b)->f;
-} // by_frequency_lo
-
-int
-by_frequency_hi(const void *a, const void *b)
-{
-	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
-} // by_frequency_hi
-
-void
-rescan_frequencies(int start, register uint32_t *set)
-{
-	register uint32_t key;
-	struct frequency *map[26];
-
-	for (int i = start; i < 26; i++)
-		map[__builtin_ctz(frq[i].m)] = frq + i;
-
-	// Reset the frequencies we haven't processed yet
-	for (int i = start; i < 26; i++)
-		frq[i].f = 0;
-
-	while ((key = *set++)) {
-		while (key) {
-			int i = __builtin_ctz(key);
-			map[i]->f++;
-			key ^= ((uint32_t)1 << i);
-		}
-	}
-
-	qsort(frq + start, 26 - start, sizeof(*frq), by_frequency_hi);
-} // rescan_frequencies
-
-#ifndef NO_BUILD_FREQUENCY_SETS
-
-void
-set_tms(register struct frequency *f)
-{
-	register uint32_t *ks = f->s, *end = f->s + f->l, key;
-	uint32_t counts[26] = {0};
-	register uint32_t *cnts = counts, cf1 = 0, cf2 = 0, cf;
-
-#if 0
-	f->tm1 = frq[25].m;
-	f->tm2 = frq[24].m;
-	return;
-#endif
-
-	// Get character frequencies for this set
-	ks = f->s;
-	end = f->s + f->l;
-	while (ks < end) {
-		key = *ks++;
-		while (key) {
-			int i = __builtin_ctz(key);
-			cnts[i]++;
-			key ^= ((uint32_t)1 << i);	// Faster than key &= (key - 1) since we know i
-		}
-	}
-
-	cnts[__builtin_ctz(f->m)] = 0;
-
-	for (int i = 0; i < 26; i++) {
-		cf = cnts[i];
-		if (cf > cf1) {
-			cf2 = cf1;
-			f->tm2 = f->tm1;
-
-			cf1 = cf;
-			f->tm1 = 1 << i;
-		} else if (cf > cf2) {
-			cf2 = cf;
-			f->tm2 = 1 << i;
-		}
-	}
-	printf("%c tm1=%c tm2=%c\n", 'a' + __builtin_ctz(f->m),
-		'a' + __builtin_ctz(f->tm1), 'a' + __builtin_ctz(f->tm2));
-} // set_tms
-
-// The role of this function is to re-arrange the key set according to all
-// words containing the least frequently used letter, and then scanning
-// the remainder and so on until all keys have been assigned to sets
-// It achieves this by swapping keys in the key set, and inserting values
-// to ensure each set is properly aligned for vectorized scanning
-void
-setup_frequency_sets(int num_poison)
-{
-	register struct frequency *f = frq;
-	register uint32_t *kp = keys;
-
-	qsort(f, 26, sizeof(*f), by_frequency_lo);
-
-	// Now set up our scan sets by lowest frequency to highest
-	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask, *ks, key;
-
-		if (i == 7)
-			rescan_frequencies(i, kp);
-
-		mask = f->m;
-		f->s = kp;
-		for (ks = kp; (key = *ks); ks++) {
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		register uint32_t nfk = kp - f->s;
-		f->l = nfk;
-
-		// Update the min_search_depth if needed
-		if (nfk > 0)
-			min_search_depth = i - 3;
-
-		// We can't do aligned AVX loads with the tiered approach.
-		// "poison" num_poison ending values with all bits set
-		for (int p = 0; p < num_poison; p++) {
-			*ks++ = *kp;
-			*kp++ = (uint32_t)(~0);
-		}
-
-		// Ensure key set is 0 terminated for next loop
-		*ks = 0;
-
-		set_tms(f);
-	}
-
-	f = frq;
-	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask, *ks, key, *end;
-
-		// Now organise each set into 2 subsets, that which
-		// has tm1 followed by that which does not
-		mask = f->tm1;
-		kp = f->s;
-		end = f->s + f->l;
-		for (ks = kp; ks < end; ks++) {
-			key = *ks;
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		f->toff2 = kp - f->s;
-
-		// Now organise each first subset into that which
-		// has tm2 followed by that which does not, and
-		// then each second subset into that which does
-		// not have tm2 followed by that which does
-
-		mask = f->tm2;
-
-		// First Subset has tm2 then not
-		kp = f->s;
-		end = f->s + f->toff2;
-		for (ks = kp; ks < end; ks++) {
-			key = *ks;
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		f->toff1 = kp - f->s;
-
-		// Second Subset does not have tm2 then has
-		kp = f->s + f->toff2;
-		end = f->s + f->l;
-		for (ks = kp; ks < end; ks++) {
-			key = *ks;
-			if (!(key & mask)) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		f->toff3 = kp - f->s;
-	}
-} // setup_frequency_sets
-
-#endif
-
-// ********************* MAIN SETUP AND OUTPUT ********************
+// ********************* RESULTS WRITER ********************
 
 // Solutions exists as a single character array assembled
 // by the solver threads We just need to write it out.
@@ -697,3 +506,219 @@ emit_solutions()
 
 	close(solution_fd);
 } // emit_solutions
+
+
+// ********************* FREQUENCY HANDLER ********************
+
+// Sort lowest to highest, but treat 0 values as "infinite"
+int
+by_frequency_lo(const void *a, const void *b)
+{
+	if (((struct frequency *)a)->f == ((struct frequency *)b)->f)
+		return 0;
+	if (((struct frequency *)a)->f == 0)
+		return 1;
+	if (((struct frequency *)b)->f == 0)
+		return -1;
+	return ((struct frequency *)a)->f - ((struct frequency *)b)->f;
+} // by_frequency_lo
+
+int
+by_frequency_hi(const void *a, const void *b)
+{
+	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
+} // by_frequency_hi
+
+#if 0
+
+// The following code used to help before the tiered set changes
+
+//		if (i == 7)
+//			rescan_frequencies(i, kp);
+
+void
+rescan_frequencies(int start, register uint32_t *set)
+{
+	register uint32_t key;
+	struct frequency *map[26];
+
+	// Reset the frequencies we haven't processed yet
+	for (int i = start; i < 26; i++) {
+		map[__builtin_ctz(frq[i].m)] = frq + i;
+		frq[i].f = 0;
+	}
+
+	while ((key = *set++)) {
+		while (key) {
+			int i = __builtin_ctz(key);
+			map[i]->f++;
+			key ^= ((uint32_t)1 << i);
+		}
+	}
+
+	qsort(frq + start, 26 - start, sizeof(*frq), by_frequency_hi);
+} // rescan_frequencies
+#endif
+
+#ifndef NO_BUILD_FREQUENCY_SETS
+
+// The following function does help a very small amount, but the overhead
+// in running is more than the speed gain it gives, so there's no point.
+// I'm leaving the code here for now, in case I find a better way to do it
+void
+set_tms(register struct frequency *f)
+{
+	int32_t counts[26];
+	register int32_t *cnts = counts, ci = __builtin_ctz(f->m);
+
+	// Determine f->tm1
+	memset(cnts, 0, sizeof(counts));
+	for (register uint32_t *ks = f->s, len = f->l; len--; ) {
+		register uint32_t key = *ks++;
+		while (key) {
+			register int i = __builtin_ctz(key);
+			if (i != ci) cnts[i]++;
+
+			// Faster than key &= (key - 1) since we know i
+			key ^= ((uint32_t)1 << i);
+		}
+	}
+
+	for (register int cf, i = 0, max = 0; i < 26; i++)
+		if ((cf = cnts[i]) > max) {
+			max = cf;
+			f->tm1 = 1 << i;
+		}
+
+	// Determine f->tm2
+	memset(cnts, 0, sizeof(counts));
+	for (register uint32_t *ks = f->s, len = f->l; len--; ) {
+		register uint32_t key = *ks++;
+		if (key & f->tm1)
+			continue;
+		while (key) {
+			register int i = __builtin_ctz(key);
+			if (i != ci) cnts[i]++;
+
+			// Faster than key &= (key - 1) since we know i
+			key ^= ((uint32_t)1 << i);
+		}
+	}
+
+	for (register int cf, i = 0, max = 0; i < 26; i++)
+		if ((cf = cnts[i]) > max) {
+			max = cf;
+			f->tm2 = 1 << i;
+		}
+
+	printf("%c tm1=%c tm2=%c\n", 'a' + __builtin_ctz(f->m),
+		'a' + __builtin_ctz(f->tm1), 'a' + __builtin_ctz(f->tm2));
+} // set_tms
+
+void
+set_tier_offsets(struct frequency *f)
+{
+	f->tm1 = frq[25].m;
+	f->tm2 = frq[24].m;
+
+	// set_tms currently costs more time than it saves
+//	set_tms(f);
+
+	register uint32_t key, mask, len;
+	register uint32_t *ks, *kp;
+
+	// Organise full set into 2 subsets, that which
+	// has tm1 followed by that which does not
+
+	mask = f->tm1;
+	kp = f->s;
+	len = f->l;
+	for (ks = kp; len--; ks++) {
+		key = *ks;
+		if (key & mask) {
+			*ks = *kp;
+			*kp++ = key;
+		}
+	}
+	f->toff2 = kp - f->s;
+
+	// Now organise each first subset into that which
+	// has tm2 followed by that which does not, and
+	// then each second subset into that which does
+	// not have tm2 followed by that which does
+
+	// First Subset has tm2 then not
+
+	mask = f->tm2;
+	kp = f->s;
+	len = f->toff2;
+	for (ks = kp; len--; ks++) {
+		key = *ks;
+		if (key & mask) {
+			*ks = *kp;
+			*kp++ = key;
+		}
+	}
+	f->toff1 = kp - f->s;
+
+	// Second Subset does not have tm2 then has
+
+	kp = f->s + f->toff2;
+	len = f->l - f->toff2;
+	for (ks = kp; len--; ks++) {
+		key = *ks;
+		if (!(key & mask)) {
+			*ks = *kp;
+			*kp++ = key;
+		}
+	}
+	f->toff3 = kp - f->s;
+} // set_tier_offsets
+
+
+// The role of this function is to re-arrange the key set according to all
+// words containing the least frequently used letter, and then scanning the
+// remainder and so on until all keys have been assigned to sets. It achieves
+// this by swapping keys in the key set and padding for any AVX operations
+void
+setup_frequency_sets(int num_poison)
+{
+	register struct frequency *f = frq;
+	register uint32_t *kp = keys;
+
+	qsort(f, 26, sizeof(*f), by_frequency_lo);
+
+	// Now set up our scan sets by lowest frequency to highest
+	for (int i = 0; i < 26; i++, f++) {
+		register uint32_t mask, *ks, key;
+
+		mask = f->m;
+		f->s = kp;
+		for (ks = kp; (key = *ks); ks++) {
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		register uint32_t nfk = kp - f->s;
+		f->l = nfk;
+
+		// Update the min_search_depth if needed
+		if (nfk > 0)
+			min_search_depth = i - 3;
+
+		// We can't do aligned AVX loads with the tiered approach.
+		// "poison" num_poison ending values with all bits set
+		for (int p = 0; p < num_poison; p++) {
+			*ks++ = *kp;
+			*kp++ = (uint32_t)(~0);
+		}
+
+		// Ensure key set is 0 terminated for next loop
+		*ks = 0;
+
+		set_tier_offsets(f);
+	}
+} // setup_frequency_sets
+
+#endif
