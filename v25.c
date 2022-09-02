@@ -32,19 +32,25 @@ static struct worker {
 	char	*end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
+struct tier {
+	uint32_t	*s;	// Pointer to set
+	uint32_t	l;	// Length of set
+	uint32_t	toff1;	// Tiered Offset 1
+	uint32_t	toff2;	// Tiered Offset 2
+	uint32_t	toff3;	// Tiered Offset 3
+};
+
 // Character frequency recording
 static struct frequency {
-	uint32_t  *s;		// Pointer to set
-	uint32_t   m;		// Mask (1 << (c - 'a'))
-	uint32_t   tm1;		// Tiered Mask 1
-	uint32_t   tm2;		// Tiered Mask 2
-	uint32_t   toff1;	// Tiered Offset 1
-	uint32_t   toff2;	// Tiered Offset 2
-	uint32_t   toff3;	// Tiered Offset 3
-	int32_t    l;		// Length of set
-	int32_t    f;		// Frequency
-	atomic_int pos;		// Position within a set
-	uint32_t   pad[5];	// Pad to 64 bytes
+	struct tier	sets[2];	// Tier Sets
+	uint32_t	m;		// Mask (1 << (c - 'a'))
+	uint32_t	tm1;		// Tiered Mask 1
+	uint32_t	tm2;		// Tiered Mask 2
+	uint32_t	tm3;		// Tiered Mask 3
+
+	uint32_t	pad[14];	// Pad to 64 bytes
+	int32_t		f;		// Frequency
+	atomic_int	pos;		// Position within a set
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -109,17 +115,19 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		if (mask & f->m)
 			continue;
 
+		register struct tier *t = f->sets + (mask & f->tm1);
+
 		// Determine the values for set and end
 		// The !! means we end up with only 0 or 1
-		register int mt1 = !!(mask & f->tm1);
 		register int mt2 = !!(mask & f->tm2);
+		register int mt3 = !!(mask & f->tm3);
 
 		// A branchless calculation of end
-		register uint32_t *end = f->s + (mt2 * f->toff3) + (!mt2 * f->l);
+		register uint32_t *end = t->s + (mt3 * t->toff3) + (!mt3 * t->l);
 
 		// A branchless calculation of set
-		mt2 &= !mt1;
-		register uint32_t *set = f->s + ((mt1 & !mt2) * f->toff2) + (mt2 * f->toff1);
+		mt3 &= !mt2;
+		register uint32_t *set = t->s + ((mt2 & !mt3) * t->toff2) + (mt3 * t->toff1);
 
 		for (; set < end; set += 8) {
 			register uint32_t vresmask = vscan(mask, set);
@@ -141,16 +149,19 @@ solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
 	register struct frequency *f = frq;
+	register struct tier *t;
 	register int32_t pos;
 
 	// Solve starting with least frequent set
-	while ((pos = atomic_fetch_add(&f->pos, 1)) < f->l)
-		find_solutions(1, f + 1, 0, 0, solution, f->s[pos]);
+	t = f->sets;
+	while ((pos = atomic_fetch_add(&f->pos, 1)) < t->l)
+		find_solutions(1, f + 1, 0, 0, solution, t->s[pos]);
 
 	// Solve after skipping least frequent set
 	f++;
-	while ((pos = atomic_fetch_add(&f->pos, 1)) < f->l)
-		find_solutions(1, f + 1, 0, 1, solution, f->s[pos]);
+	t = f->sets;
+	while ((pos = atomic_fetch_add(&f->pos, 1)) < t->l)
+		find_solutions(1, f + 1, 0, 1, solution, t->s[pos]);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
@@ -244,9 +255,10 @@ main(int argc, char *argv[])
 
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
+		struct tier *t = frq[i].sets;
 		char c = 'a' + __builtin_ctz(frq[i].m);
 		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
-			c, frq[i].l, frq[i].toff1, frq[i].toff2, frq[i].toff3);
+			c, t->l, t->toff1, t->toff2, t->toff3);
 	}
 	printf("\n\n");
 

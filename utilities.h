@@ -14,6 +14,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
+static uint32_t	tkeys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
@@ -562,69 +563,16 @@ rescan_frequencies(int start, register uint32_t *set)
 
 #ifndef NO_BUILD_FREQUENCY_SETS
 
-// The following function does help a very small amount, but the overhead
-// in running is more than the speed gain it gives, so there's no point.
-// I'm leaving the code here for now, in case I find a better way to do it
-void
-set_tms(register struct frequency *f)
-{
-	int32_t counts[26];
-	register int32_t *cnts = counts, ci = __builtin_ctz(f->m);
-
-	// Determine f->tm1
-	memset(cnts, 0, sizeof(counts));
-	for (register uint32_t *ks = f->s, len = f->l; len--; ) {
-		register uint32_t key = *ks++;
-		while (key) {
-			register int i = __builtin_ctz(key);
-			if (i != ci) cnts[i]++;
-
-			// Faster than key &= (key - 1) since we know i
-			key ^= ((uint32_t)1 << i);
-		}
-	}
-
-	for (register int cf, i = 0, max = 0; i < 26; i++)
-		if ((cf = cnts[i]) > max) {
-			max = cf;
-			f->tm1 = 1 << i;
-		}
-
-	// Determine f->tm2
-	memset(cnts, 0, sizeof(counts));
-	for (register uint32_t *ks = f->s, len = f->l; len--; ) {
-		register uint32_t key = *ks++;
-		if (key & f->tm1)
-			continue;
-		while (key) {
-			register int i = __builtin_ctz(key);
-			if (i != ci) cnts[i]++;
-
-			// Faster than key &= (key - 1) since we know i
-			key ^= ((uint32_t)1 << i);
-		}
-	}
-
-	for (register int cf, i = 0, max = 0; i < 26; i++)
-		if ((cf = cnts[i]) > max) {
-			max = cf;
-			f->tm2 = 1 << i;
-		}
-
-	printf("%c tm1=%c tm2=%c\n", 'a' + __builtin_ctz(f->m),
-		'a' + __builtin_ctz(f->tm1), 'a' + __builtin_ctz(f->tm2));
-} // set_tms
-
 // This function looks like it's doing a lot, but because of good spatial
 // and temportal localities each call typically takes ~1us on words_alpha
 void
 set_tier_offsets(struct frequency *f)
 {
+	register struct tier *t = f->sets;
+
 	f->tm1 = frq[25].m;
 	f->tm2 = frq[24].m;
-
-	// set_tms currently costs more time than it saves
-//	set_tms(f);
+	f->tm3 = frq[23].m;
 
 	register uint32_t key, mask, len;
 	register uint32_t *ks, *kp;
@@ -632,11 +580,11 @@ set_tier_offsets(struct frequency *f)
 	// Organise full set into 2 subsets, that which
 	// has tm1 followed by that which does not
 
-	mask = f->tm1;
+	mask = f->tm2;
 
 	// First subset has tm1, and then now
-	ks = kp = f->s;
-	len = f->l;
+	ks = kp = t->s;
+	len = t->l;
 	for (; len--; ks++) {
 		key = *ks;
 		if (key & mask) {
@@ -644,18 +592,18 @@ set_tier_offsets(struct frequency *f)
 			*kp++ = key;
 		}
 	}
-	f->toff2 = kp - f->s;
+	t->toff2 = kp - t->s;
 
 	// Now organise the first tm1 subset into that which
 	// has tm2 followed by that which does not, and then
 	// the second tm1 subset into that which does not
 	// have tm2 followed by that which does
 
-	mask = f->tm2;
+	mask = f->tm3;
 
 	// First tm1 subset has tm2 then not
-	ks = kp = f->s;
-	len = f->toff2;
+	ks = kp = t->s;
+	len = t->toff2;
 	for (; len--; ks++) {
 		key = *ks;
 		if (key & mask) {
@@ -663,11 +611,11 @@ set_tier_offsets(struct frequency *f)
 			*kp++ = key;
 		}
 	}
-	f->toff1 = kp - f->s;
+	t->toff1 = kp - t->s;
 
 	// Second tm1 subset does not have tm2 then has
-	ks = kp = f->s + f->toff2;
-	len = f->l - f->toff2;
+	ks = kp = t->s + t->toff2;
+	len = t->l - t->toff2;
 	for (; len--; ks++) {
 		key = *ks;
 		if (!(key & mask)) {
@@ -675,8 +623,27 @@ set_tier_offsets(struct frequency *f)
 			*kp++ = key;
 		}
 	}
-	f->toff3 = kp - f->s;
+	t->toff3 = kp - t->s;
 } // set_tier_offsets
+
+
+void
+setup_tkeys(struct frequency *f, int num_poison)
+{
+	static uint32_t ntkeys = 0;
+	register uint32_t *kp = tkeys + ntkeys, tm1 = frq[25].m;
+	register uint32_t *ks = f->s, len = f->l, key;
+
+	while (len--)
+		if (!((key = *ks++) & tm1))
+			*kp++ = key;
+
+	for (register uint32_t p = num_poison; p--; )
+		*kp++ = (uint32_t)(~0);
+
+	ntkeys = kp - tkeys;
+//	printf("ntkeys = %u\n", ntkeys);
+} // setup_tkeys
 
 
 // The role of this function is to re-arrange the key set according to all
@@ -691,6 +658,7 @@ void
 setup_frequency_sets(int num_poison)
 {
 	register struct frequency *f = frq;
+	register struct tier *t;
 	register uint32_t *kp = keys;
 
 	qsort(f, 26, sizeof(*f), by_frequency_lo);
@@ -698,18 +666,19 @@ setup_frequency_sets(int num_poison)
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
 		register uint32_t mask = f->m, *ks = kp, key;
+		t = f->sets;
 
-		for (f->s = kp; (key = *ks); ks++)
+		for (t->s = kp; (key = *ks); ks++)
 			if (key & mask) {
 				*ks = *kp;
 				*kp++ = key;
 			}
 
 		// Calculate the set length
-		f->l = kp - f->s;
+		t->l = kp - t->s;
 
 		// Update the min_search_depth if needed
-		if (f->l > 0)
+		if (t->l > 0)
 			min_search_depth = i - 3;
 
 		// We can't do aligned AVX loads with the tiered approach.
@@ -723,6 +692,7 @@ setup_frequency_sets(int num_poison)
 
 		// Calculate our tier offsets
 		set_tier_offsets(f);
+		setup_tkeys(f, num_poison);
 	}
 } // setup_frequency_sets
 
