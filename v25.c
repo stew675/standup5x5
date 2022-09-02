@@ -32,6 +32,7 @@ static struct worker {
 	char	*end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
+// Set Pointers
 struct tier {
 	uint32_t	*s;	// Pointer to set
 	uint32_t	l;	// Length of set

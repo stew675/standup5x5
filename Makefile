@@ -6,7 +6,7 @@
 # Use gcc for consistent optimization behavior
 
 #all: a25 s25 v25 525
-all: v25
+all: s25 v25
 
 CC=clang-12
 #CC=gcc
@@ -17,8 +17,8 @@ LIBS=-lpthread
 #a25: a25.c utilities.h Makefile
 #	$(CC) -fno-inline $(CFLAGS) -o $@ a25.c $(LIBS)
 
-#s25: s25.c utilities.h Makefile
-#	$(CC) $(CFLAGS) -o $@ s25.c $(LIBS)
+s25: s25.c utilities.h Makefile
+	$(CC) $(CFLAGS) -o $@ s25.c $(LIBS)
 
 v25: v25.c utilities.h Makefile
 	$(CC) $(CFLAGS) -o $@ v25.c $(LIBS)

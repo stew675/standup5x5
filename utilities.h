@@ -530,37 +530,6 @@ by_frequency_hi(const void *a, const void *b)
 	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
 } // by_frequency_hi
 
-#if 0
-
-// The following code used to help before the tiered set changes
-
-//		if (i == 7)
-//			rescan_frequencies(i, kp);
-
-void
-rescan_frequencies(int start, register uint32_t *set)
-{
-	register uint32_t key;
-	struct frequency *map[26];
-
-	// Reset the frequencies we haven't processed yet
-	for (int i = start; i < 26; i++) {
-		map[__builtin_ctz(frq[i].m)] = frq + i;
-		frq[i].f = 0;
-	}
-
-	while ((key = *set++)) {
-		while (key) {
-			int i = __builtin_ctz(key);
-			map[i]->f++;
-			key ^= ((uint32_t)1 << i);
-		}
-	}
-
-	qsort(frq + start, 26 - start, sizeof(*frq), by_frequency_hi);
-} // rescan_frequencies
-#endif
-
 #ifndef NO_BUILD_FREQUENCY_SETS
 
 // This function looks like it's doing a lot, but because of good spatial
@@ -626,17 +595,41 @@ set_tier_offsets(struct frequency *f)
 	t->toff3 = kp - t->s;
 } // set_tier_offsets
 
-
 void
 setup_tkeys(struct frequency *f, int num_poison)
 {
 	static uint32_t ntkeys = 0;
-	register uint32_t *kp = tkeys + ntkeys, tm1 = frq[25].m;
-	register uint32_t *ks = f->s, len = f->l, key;
+	register struct tier *t0 = f->sets;
+	register struct tier *t1 = f->sets + 1;
+	register uint32_t *kp = tkeys + ntkeys, tm1 = f->tm1;
+	register uint32_t *ks, len, key;
 
+	ks = t0->s;
+	t1->s = kp;
+
+	len = t0->toff1;
 	while (len--)
 		if (!((key = *ks++) & tm1))
 			*kp++ = key;
+	t1->toff1 = kp - t1->s;
+
+	len = t0->toff2 - t0->toff1;
+	while (len--)
+		if (!((key = *ks++) & tm1))
+			*kp++ = key;
+	t1->toff2 = kp - t1->s;
+
+	len = t0->toff3 - t0->toff2;
+	while (len--)
+		if (!((key = *ks++) & tm1))
+			*kp++ = key;
+	t1->toff3 = kp - t1->s;
+
+	len = t0->l - t0->toff3;
+	while (len--)
+		if (!((key = *ks++) & tm1))
+			*kp++ = key;
+	t1->l = kp - t1->s;
 
 	for (register uint32_t p = num_poison; p--; )
 		*kp++ = (uint32_t)(~0);
