@@ -118,6 +118,8 @@ the same solution.  Where I was focusing on combinating over sets, Sylvester was
 combinating over letters, but the actual implementation was extremely similar
 in a remarkable example of convergent design.
 
+Sylvester's work is here: https://github.com/oisyn/parkerwords
+
 I then saw how Sylvester had solved the 25 instead of 26 approach with his
 clever skipping implementation that skips at the start of the combinator,
 instead of my approach that skipped at the end.  His approach actually
@@ -188,6 +190,58 @@ I moved all the file reading and other utility functions to a common `utilities.
 file that is included by the main algorithms.  In this way, any future tweaks
 should be consistent across all implementations
 
+### Major Update Sep 1st
+
+I received an email from Landon Kryger about his solution here:
+https://github.com/GuiltyBystander/5words
+
+Landon had come up with the most efficient implementation of the search problem
+I'd ever seen.  Truly fantastic work!  Landon says that he arrived at his
+solution also fairly independely, but at its core it uses the same basic
+algorithm that Sylvester and myself had found.
+
+Where Landon went one step further is that he had added a further breakdown of
+the search space, where the presence (or not) of the most common letters is
+used to divide each set further, such that when progressing through the sets,
+characters that are already seen are used to eliminate sub-sets of the sets
+from being considered.  This comes at a cost of a somewhat high amount of set
+up overhead, but for a single-threaded solution, his was simply the fastest
+around.
+
+Landon was looking for someone to collaborate with to help make his solution
+faster.  I spent some time analysing how his algorithm works, and while it is
+extremely clever and elegant, it is somewhat difficult to parallelise the
+setup steps, and the bit-mask remapping he implements which is essential to
+the speed of his approach consumes a significant amount of CPU time, and also
+forces a point of linearity to derive the mapping.  The remapping of the bitmaps
+can be parallelised, as can the set building, but spatial locality issues arise
+from the data being scattered across many different arrays/vectors.
+
+As a direct comparison, even though Landon's solution makes 30x less comparisons
+during the search phase, his algorithm is just 3x faster when using a single
+thread.  I think we can implement a solution true to his original vision in a
+highly parallelised manner, but it would be a fair amount of work.
+
+So instead I worked with Landon to arrive at a hybrid solution that isn't as
+element or as flexible as Landon's core solution, but preserves the strong
+spatial locality inherent in the "pointers within a single set" approach that
+my solution implements.
+
+With that, I updated s25.c, v25.c and 525.c to implement this hybrid approach,
+and huge speedups were seen in low thread numbers, but smaller speedups as
+threads are increased.
+
+v25.c is now capable of finding all 538 solutions on my system in under 1ms
+including loading the 4MB words-alpha.txt file, solving, and writing the
+results out.  Even using just a single thread takes under 6ms.
+
+Where Landon's approach uses the 5 most frequently occurring characters to
+create subsets from, the hybrid solution only uses 2, and it is still slightly
+slower than Landon's solution for a single thread scenario.
+
+### To Do
+
+Add a 3rd or even 4th tier to the hybrid solution (currently in development).
 
 ### Conclusion
 
