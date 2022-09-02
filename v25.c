@@ -35,14 +35,16 @@ static struct worker {
 // Character frequency recording
 static struct frequency {
 	uint32_t  *s;		// Pointer to set
-	struct frequency *e;	// Pointer min_search_depth set
 	uint32_t   m;		// Mask (1 << (c - 'a'))
-	uint32_t  to;		// Tiered Offset
-	uint32_t  tm;		// Tiered Mask
+	uint32_t  tm1;		// Tier 1 Mask
+	uint32_t  tm2;		// Tier 2 Mask
+	uint32_t  toff1;	// Tier offset 1
+	uint32_t  toff2;	// Tier offset 2
+	uint32_t  toff3;	// Tier offset 3
 	int32_t    f;		// Frequency
 	int32_t    l;		// Length of set
 	atomic_int pos;		// Position within a set
-	int32_t	pad[6];		// Pad to 64 bytes
+	uint32_t  pad[5];	// Pad to 64 bytes
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -73,19 +75,21 @@ void
 setup_frequency_sets()
 {
 	register struct frequency *f = frq;
-	register uint32_t *kp = keys, tm;
+	register uint32_t *kp = keys, tm1, tm2;
 
 	qsort(f, 26, sizeof(*f), by_frequency_lo);
-	tm = frq[25].m;
+	tm1 = frq[25].m;
+	tm2 = frq[24].m;
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
 		register uint32_t mask, *ks, key;
 
-		if (i == 7)
-			rescan_frequencies(i, kp);
+//		if (i == 7)
+//			rescan_frequencies(i, kp);
 
-		f->tm = tm;
+		f->tm1 = tm1;
+		f->tm2 = tm2;
 		mask = f->m;
 		f->s = kp;
 		for (ks = kp; (key = *ks); ks++) {
@@ -101,9 +105,9 @@ setup_frequency_sets()
 		if (nfk > 0)
 			min_search_depth = i - 3;
 
-		// Ensure 32-byte alignments for the set
-		// We "poison" the alignment values with all bits set
-		while ((nfk++ % 8)) {
+		// We can't do aligned AVX loads with the tiered
+		// approach. "poison" 8 values with all bits set
+		for (int p = 0; p < 8; p++) {
 			*ks++ = *kp;
 			*kp++ = (uint32_t)(~0);
 		}
@@ -111,17 +115,15 @@ setup_frequency_sets()
 		// Ensure key set is 0 terminated for next loop
 		*ks = 0;
 	}
-	for (int i = 0; i < 26; i++)
-		frq[i].e = frq + min_search_depth;
 
-	// Now organise each set into that which
-	// has tm followed by that which does not
+	// Now organise each set into 2 subsets, that which
+	// has tm1 followed by that which does not
 	f = frq;
 	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask = f->tm, *ks, key;
+		register uint32_t mask = f->tm1, *ks, key, *end;
 
 		kp = f->s;
-		register uint32_t *end = f->s + f->l;
+		end = f->s + f->l;
 		for (ks = kp; ks < end; ks++) {
 			key = *ks;
 			if (key & mask) {
@@ -129,11 +131,42 @@ setup_frequency_sets()
 				*kp++ = key;
 			}
 		}
-		f->to = kp - f->s;
-		f->to -= (f->to % 8);		// Align the offset for AVX
+		f->toff2 = kp - f->s;
 
-		if (f->m == f->tm)
-			break;
+		// Now organise each first subset into that which
+		// has tm2 followed by that which does not, and
+		// then each second subset into that which does
+		// not have tm2 followed by that which does
+
+		mask = f->tm2;
+
+		// First Subset has tm2 then not
+		kp = f->s;
+		end = f->s + f->toff2;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->toff1 = kp - f->s;
+
+		// Second Subset does not have tm2 then has
+		kp = f->s + f->toff2;
+		end = f->s + f->l;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (!(key & mask)) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->toff3 = kp - f->s;
+
+//		f->toff1 -= (f->toff1 % 8);
+//		f->toff2 -= (f->toff2 % 8);
+//		f->toff3 -= (f->toff3 % 8);
 	}
 } // setup_frequency_sets
 
@@ -160,7 +193,7 @@ static inline uint32_t
 vscan(register uint32_t mask, register uint32_t *set)
 {
 	__m256i vmask = _mm256_set1_epi32(mask);
-	__m256i vkeys = _mm256_load_si256((__m256i *)set);
+	__m256i vkeys = _mm256_loadu_si256((__m256i *)set);
 	__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), _mm256_setzero_si256());
 	return (uint32_t)_mm256_movemask_epi8(vres);
 } // vscan
@@ -176,12 +209,24 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		return add_solution(solution);
 	mask |= key;
 
-	for (register struct frequency *e = f->e + depth; f < e; f++) {
+	register struct frequency *e = frq + (min_search_depth + depth);
+	for (; f < e; f++) {
 		if (mask & f->m)
 			continue;
 
-		register uint32_t *set = f->s + f->to * (!!(mask & f->tm));;
-		for (register uint32_t *end = f->s + f->l; set < end; set += 8) {
+		// Determine the values for set and end
+		// The !! means we end up with only 0 or 1
+		register int mt1 = !!(mask & f->tm1);
+		register int mt2 = !!(mask & f->tm2);
+
+		// A branchless calculation of end
+		register uint32_t *end = f->s + (mt2 * f->toff3) + (!mt2 * f->l);
+
+		// A branchless calculation of set
+		mt2 &= !mt1;
+		register uint32_t *set = f->s + ((mt1 & !mt2) * f->toff2) + (mt2 * f->toff1);
+
+		for (; set < end; set += 8) {
 			register uint32_t vresmask = vscan(mask, set);
 			while (vresmask) {
 				register int i = __builtin_ctz(vresmask);
@@ -305,7 +350,8 @@ main(int argc, char *argv[])
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length = %5d      tiered_offset = %5d\n", c, frq[i].l, frq[i].to);
+		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
+			c, frq[i].l, frq[i].toff1, frq[i].toff2, frq[i].toff3);
 	}
 	printf("\n\n");
 
