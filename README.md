@@ -237,7 +237,7 @@ results out.  Even using just a single thread takes under 6ms.
 
 Where Landon's approach uses the 5 most frequently occurring characters to
 create subsets from, the hybrid solution only uses 2, and it is still slightly
-slower than Landon's solution for a single thread scenario.
+slower than Landon's solution for a single thread scenario for non-AVX mode.
 
 ### To Do
 
