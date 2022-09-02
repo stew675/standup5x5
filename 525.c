@@ -20,20 +20,18 @@
 
 #ifdef __AVX512F__
 
-#define ctz(x)		__builtin_ctz(x)	// Count Trailing Zeros
-
 #define USE_AVX2_SCAN
 
 #define	MAX_SOLUTIONS	8192
 #define	MAX_WORDS	8192
-#define	MAX_THREADS	  64
+#define	MAX_THREADS	  24
 
 static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	char *start;
-	char *end;
+	char	*start;
+	char	*end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
 // Character frequency recording
@@ -96,8 +94,8 @@ vscan(register uint32_t mask, register uint32_t *set)
 	return (uint16_t) _mm512_cmpeq_epi32_mask(_mm512_and_si512(vmask, vkeys), _mm512_setzero_si512());
 } // vscan
 
-// find_solutions() which is the busiest loop is thereby
-// kept as small and tight as possible for the most speed
+// find_solutions() which is the busiest loop is kept
+// as small and tight as possible for the most speed
 void
 find_solutions(register int depth, register struct frequency *f, register uint32_t mask,
 		register int skipped, register uint32_t *solution, register uint32_t key)
@@ -107,7 +105,6 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		return add_solution(solution);
 	mask |= key;
 
-	// Keep these loops tight!
 	register struct frequency *e = frq + (min_search_depth + depth);
 
 	for (; f < e; f++) {
@@ -129,7 +126,7 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		for (; set < end; set += 16) {
 			register uint16_t vresmask = vscan(mask, set);
 			while (vresmask) {
-				register int i = ctz(vresmask);
+				register int i = __builtin_ctz(vresmask);
 				find_solutions(depth + 1, f + 1, mask, skipped, solution, set[i]);
 				vresmask ^= ((uint16_t)1 << i);
 			}
@@ -163,7 +160,7 @@ solve_work()
 void
 solve()
 {
-	// Instruct worker pool to commence solving
+	// Instruct any waiting worker-threads to start solving
 	start_solvers();
 
 	// The main thread also participates in finding solutions
@@ -171,7 +168,7 @@ solve()
 
 	// Wait for all solver threads to finish up
 	while(solvers_done < nthreads)
-		usleep(1);
+		asm("nop");
 } // solve
 
 
@@ -249,8 +246,9 @@ main(int argc, char *argv[])
 
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
-		char c = 'a' + ctz(frq[i].m);
-		printf("%c set_length = %d\n", c, frq[i].l);
+		char c = 'a' + __builtin_ctz(frq[i].m);
+		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
+			c, frq[i].l, frq[i].toff1, frq[i].toff2, frq[i].toff3);
 	}
 	printf("\n\n");
 

@@ -28,23 +28,23 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	char     *start;
-	char     *end;
+	char	*start;
+	char	*end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
 // Character frequency recording
 static struct frequency {
 	uint32_t  *s;		// Pointer to set
 	uint32_t   m;		// Mask (1 << (c - 'a'))
-	uint32_t  tm1;		// Tier 1 Mask
-	uint32_t  tm2;		// Tier 2 Mask
-	uint32_t  toff1;	// Tier offset 1
-	uint32_t  toff2;	// Tier offset 2
-	uint32_t  toff3;	// Tier offset 3
-	int32_t    f;		// Frequency
+	uint32_t   tm1;		// Tiered Mask 1
+	uint32_t   tm2;		// Tiered Mask 2
+	uint32_t   toff1;	// Tiered Offset 1
+	uint32_t   toff2;	// Tiered Offset 2
+	uint32_t   toff3;	// Tiered Offset 3
 	int32_t    l;		// Length of set
+	int32_t    f;		// Frequency
 	atomic_int pos;		// Position within a set
-	uint32_t  pad[5];	// Pad to 64 bytes
+	uint32_t   pad[5];	// Pad to 64 bytes
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -54,7 +54,7 @@ atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done = 0;
 atomic_int	solvers_done = 0;
 
-// Put general global variables on their own cache line
+// Put all general global variables on their own cache line
 static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
@@ -69,7 +69,7 @@ static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 // ********************* SOLVER ALGORITHM ********************
 
 static void
-add_solution(uint32_t *solution)
+add_solution(register uint32_t *solution)
 {
 	register int i, pos = atomic_fetch_add(&num_sol, 1);
 	register char *so = solutions + pos * 30;
