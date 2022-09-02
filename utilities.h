@@ -615,6 +615,8 @@ set_tms(register struct frequency *f)
 		'a' + __builtin_ctz(f->tm1), 'a' + __builtin_ctz(f->tm2));
 } // set_tms
 
+// This function looks like it's doing a lot, but because of good spatial
+// and temportal localities each call typically takes ~1us on words_alpha
 void
 set_tier_offsets(struct frequency *f)
 {
@@ -631,9 +633,11 @@ set_tier_offsets(struct frequency *f)
 	// has tm1 followed by that which does not
 
 	mask = f->tm1;
-	kp = f->s;
+
+	// First subset has tm1, and then now
+	ks = kp = f->s;
 	len = f->l;
-	for (ks = kp; len--; ks++) {
+	for (; len--; ks++) {
 		key = *ks;
 		if (key & mask) {
 			*ks = *kp;
@@ -642,17 +646,17 @@ set_tier_offsets(struct frequency *f)
 	}
 	f->toff2 = kp - f->s;
 
-	// Now organise each first subset into that which
-	// has tm2 followed by that which does not, and
-	// then each second subset into that which does
-	// not have tm2 followed by that which does
-
-	// First Subset has tm2 then not
+	// Now organise the first tm1 subset into that which
+	// has tm2 followed by that which does not, and then
+	// the second tm1 subset into that which does not
+	// have tm2 followed by that which does
 
 	mask = f->tm2;
-	kp = f->s;
+
+	// First tm1 subset has tm2 then not
+	ks = kp = f->s;
 	len = f->toff2;
-	for (ks = kp; len--; ks++) {
+	for (; len--; ks++) {
 		key = *ks;
 		if (key & mask) {
 			*ks = *kp;
@@ -661,11 +665,10 @@ set_tier_offsets(struct frequency *f)
 	}
 	f->toff1 = kp - f->s;
 
-	// Second Subset does not have tm2 then has
-
-	kp = f->s + f->toff2;
+	// Second tm1 subset does not have tm2 then has
+	ks = kp = f->s + f->toff2;
 	len = f->l - f->toff2;
-	for (ks = kp; len--; ks++) {
+	for (; len--; ks++) {
 		key = *ks;
 		if (!(key & mask)) {
 			*ks = *kp;
@@ -680,6 +683,10 @@ set_tier_offsets(struct frequency *f)
 // words containing the least frequently used letter, and then scanning the
 // remainder and so on until all keys have been assigned to sets. It achieves
 // this by swapping keys in the key set and padding for any AVX operations
+//
+// Despite looking CPU and memory intensive, this function utilises strong
+// spatial and temporal locality principles, and so runs in ~42us in practise
+// without factoring in the calls to set_tier_offsets()
 void
 setup_frequency_sets(int num_poison)
 {
@@ -690,33 +697,31 @@ setup_frequency_sets(int num_poison)
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask, *ks, key;
+		register uint32_t mask = f->m, *ks = kp, key;
 
-		mask = f->m;
-		f->s = kp;
-		for (ks = kp; (key = *ks); ks++) {
+		for (f->s = kp; (key = *ks); ks++)
 			if (key & mask) {
 				*ks = *kp;
 				*kp++ = key;
 			}
-		}
-		register uint32_t nfk = kp - f->s;
-		f->l = nfk;
+
+		// Calculate the set length
+		f->l = kp - f->s;
 
 		// Update the min_search_depth if needed
-		if (nfk > 0)
+		if (f->l > 0)
 			min_search_depth = i - 3;
 
 		// We can't do aligned AVX loads with the tiered approach.
 		// "poison" num_poison ending values with all bits set
-		for (int p = 0; p < num_poison; p++) {
+		// and ensure key set is 0 terminated for next loop
+		for (register uint32_t p = num_poison; p--; ) {
 			*ks++ = *kp;
 			*kp++ = (uint32_t)(~0);
 		}
-
-		// Ensure key set is 0 terminated for next loop
 		*ks = 0;
 
+		// Calculate our tier offsets
 		set_tier_offsets(f);
 	}
 } // setup_frequency_sets
