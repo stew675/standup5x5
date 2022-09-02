@@ -62,107 +62,6 @@ static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
 #include "utilities.h"
 
-// The role of this function is to re-arrange the key set according to all
-// words containing the least frequently used letter, and then scanning
-// the remainder and so on until all keys have been assigned to sets
-// It achieves this by swapping keys in the key set, and inserting values
-// to ensure each set is properly aligned for vectorized scanning
-void
-setup_frequency_sets()
-{
-	register struct frequency *f = frq;
-	register uint32_t *kp = keys, tm1, tm2;
-
-	qsort(f, 26, sizeof(*f), by_frequency_lo);
-	tm1 = frq[25].m;
-	tm2 = frq[24].m;
-
-	// Split full keyset into sets organised by the
-	// least frequently occurring letter to the most
-	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask, *ks, key;
-
-		if (i == 7)
-			rescan_frequencies(i, kp);
-
-		f->tm1 = tm1;
-		f->tm2 = tm2;
-
-		mask = f->m;
-		f->s = kp;
-		for (ks = kp; (key = *ks); ks++) {
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-
-		register uint32_t nfk = kp - f->s;
-		f->l = nfk;
-
-		// Update the min_search_depth if needed
-		if (nfk > 0)
-			min_search_depth = i - 3;
-
-		// 0-terminate this frequency key set
-		*ks++ = *kp;
-		*kp++ = 0;
-
-		// Ensure key set is 0 terminated for next loop
-		*ks = 0;
-	}
-
-	// Now organise each set into 2 subsets, that which
-	// has tm1 followed by that which does not
-	f = frq;
-	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask = f->tm1, *ks, key, *end;
-
-		kp = f->s;
-		end = f->s + f->l;
-		for (ks = kp; ks < end; ks++) {
-			key = *ks;
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		f->toff2 = kp - f->s;
-
-		// Now organise each first subset into that which
-		// has tm2 followed by that which does not, and
-		// then each second subset into that which does
-		// not have tm2 followed by that which does
-
-		mask = f->tm2;
-
-		// First Subset has tm2 then not
-		kp = f->s;
-		end = f->s + f->toff2;
-		for (ks = kp; ks < end; ks++) {
-			key = *ks;
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		f->toff1 = kp - f->s;
-
-		// Second Subset does not have tm2 then has
-		kp = f->s + f->toff2;
-		end = f->s + f->l;
-		for (ks = kp; ks < end; ks++) {
-			key = *ks;
-			if (!(key & mask)) {
-				*ks = *kp;
-				*kp++ = key;
-			}
-		}
-		f->toff3 = kp - f->s;
-	}
-} // setup_frequency_sets
-
-
 // ********************* SOLUTION FUNCTIONS ********************
 
 static void
@@ -309,7 +208,7 @@ main(int argc, char *argv[])
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
 
-	setup_frequency_sets();
+	setup_frequency_sets(1);
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
 

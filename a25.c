@@ -21,6 +21,8 @@
 #define	MAX_WORDS	8192
 #define	MAX_THREADS	  64
 
+#define NO_BUILD_FREQUENCY_SETS
+
 static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
@@ -84,7 +86,7 @@ combo(int n, int r, int d)
 
 
 void
-setup_frequency_sets()
+create_sets()
 {
 	register uint32_t *kp = keys, mask, *ks, key;
 
@@ -111,7 +113,7 @@ setup_frequency_sets()
 	frq[1].s = kp;
 	frq[1].e = ks;
 	frq[1].l = ks - kp;
-} // setup_frequency_sets
+} // create_sets
 
 
 // ********************* SOLUTION FUNCTIONS ********************
@@ -348,7 +350,7 @@ main(int argc, char *argv[])
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
 
-	setup_frequency_sets();
+	create_sets();
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
 

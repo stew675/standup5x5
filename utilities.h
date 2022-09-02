@@ -509,6 +509,153 @@ rescan_frequencies(int start, register uint32_t *set)
 	qsort(frq + start, 26 - start, sizeof(*frq), by_frequency_hi);
 } // rescan_frequencies
 
+#ifndef NO_BUILD_FREQUENCY_SETS
+
+void
+set_tms(register struct frequency *f)
+{
+	register uint32_t *ks = f->s, *end = f->s + f->l, key;
+	uint32_t counts[26] = {0};
+	register uint32_t *cnts = counts, cf1 = 0, cf2 = 0, cf;
+
+#if 0
+	f->tm1 = frq[25].m;
+	f->tm2 = frq[24].m;
+	return;
+#endif
+
+	// Get character frequencies for this set
+	ks = f->s;
+	end = f->s + f->l;
+	while (ks < end) {
+		key = *ks++;
+		while (key) {
+			int i = __builtin_ctz(key);
+			cnts[i]++;
+			key ^= ((uint32_t)1 << i);	// Faster than key &= (key - 1) since we know i
+		}
+	}
+
+	cnts[__builtin_ctz(f->m)] = 0;
+
+	for (int i = 0; i < 26; i++) {
+		cf = cnts[i];
+		if (cf > cf1) {
+			cf2 = cf1;
+			f->tm2 = f->tm1;
+
+			cf1 = cf;
+			f->tm1 = 1 << i;
+		} else if (cf > cf2) {
+			cf2 = cf;
+			f->tm2 = 1 << i;
+		}
+	}
+	printf("%c tm1=%c tm2=%c\n", 'a' + __builtin_ctz(f->m),
+		'a' + __builtin_ctz(f->tm1), 'a' + __builtin_ctz(f->tm2));
+} // set_tms
+
+// The role of this function is to re-arrange the key set according to all
+// words containing the least frequently used letter, and then scanning
+// the remainder and so on until all keys have been assigned to sets
+// It achieves this by swapping keys in the key set, and inserting values
+// to ensure each set is properly aligned for vectorized scanning
+void
+setup_frequency_sets(int num_poison)
+{
+	register struct frequency *f = frq;
+	register uint32_t *kp = keys;
+
+	qsort(f, 26, sizeof(*f), by_frequency_lo);
+
+	// Now set up our scan sets by lowest frequency to highest
+	for (int i = 0; i < 26; i++, f++) {
+		register uint32_t mask, *ks, key;
+
+		if (i == 7)
+			rescan_frequencies(i, kp);
+
+		mask = f->m;
+		f->s = kp;
+		for (ks = kp; (key = *ks); ks++) {
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		register uint32_t nfk = kp - f->s;
+		f->l = nfk;
+
+		// Update the min_search_depth if needed
+		if (nfk > 0)
+			min_search_depth = i - 3;
+
+		// We can't do aligned AVX loads with the tiered approach.
+		// "poison" num_poison ending values with all bits set
+		for (int p = 0; p < num_poison; p++) {
+			*ks++ = *kp;
+			*kp++ = (uint32_t)(~0);
+		}
+
+		// Ensure key set is 0 terminated for next loop
+		*ks = 0;
+
+		set_tms(f);
+	}
+
+	f = frq;
+	for (int i = 0; i < 26; i++, f++) {
+		register uint32_t mask, *ks, key, *end;
+
+		// Now organise each set into 2 subsets, that which
+		// has tm1 followed by that which does not
+		mask = f->tm1;
+		kp = f->s;
+		end = f->s + f->l;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->toff2 = kp - f->s;
+
+		// Now organise each first subset into that which
+		// has tm2 followed by that which does not, and
+		// then each second subset into that which does
+		// not have tm2 followed by that which does
+
+		mask = f->tm2;
+
+		// First Subset has tm2 then not
+		kp = f->s;
+		end = f->s + f->toff2;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->toff1 = kp - f->s;
+
+		// Second Subset does not have tm2 then has
+		kp = f->s + f->toff2;
+		end = f->s + f->l;
+		for (ks = kp; ks < end; ks++) {
+			key = *ks;
+			if (!(key & mask)) {
+				*ks = *kp;
+				*kp++ = key;
+			}
+		}
+		f->toff3 = kp - f->s;
+	}
+} // setup_frequency_sets
+
+#endif
+
 // ********************* MAIN SETUP AND OUTPUT ********************
 
 // Solutions exists as a single character array assembled
