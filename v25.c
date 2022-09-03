@@ -63,24 +63,11 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 	mask |= key;
 
 	struct frequency *e = frq + (min_search_depth + depth);
-	for (; f < e; f++) {
+	for (uint32_t *set, *end; f < e; f++) {
 		if (mask & f->m)
 			continue;
 
-		struct tier *t = f->sets + !!(mask & f->tm1) + (!!(mask & f->tm2) << 1) +
-				    (!!(mask & f->tm3) << 2) + (!!(mask & f->tm4) << 3);
-
-		// Determine the values for set and end
-		// The !! means we end up with only 0 or 1
-		int mf = !!(mask & f->tm5);
-		int ms = !!(mask & f->tm6);
-
-		// A branchless calculation of end
-		uint32_t *end = t->s + (ms * t->toff3) + (!ms * t->l);
-
-		// A branchless calculation of set
-		ms &= !mf;
-		uint32_t *set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);
+		CALCULATE_SET_AND_END;
 
 		for (; set < end; set += 8) {
 			uint32_t vresmask = vscan(mask, set);

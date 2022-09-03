@@ -649,6 +649,22 @@ by_frequency_hi(const void *a, const void *b)
 	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
 } // by_frequency_hi
 
+
+// Determine the values for set and end in a branchless manner
+// The !! means we end up with only 0 or 1
+#define CALCULATE_SET_AND_END						\
+	do {								\
+		struct tier *t = f->sets + !!(mask & f->tm1) +		\
+					(!!(mask & f->tm2) << 1) +	\
+					(!!(mask & f->tm3) << 2) +	\
+					(!!(mask & f->tm4) << 3);	\
+		int mf = !!(mask & f->tm5);				\
+		int ms = !!(mask & f->tm6);				\
+		end = t->s + (ms * t->toff3) + (!ms * t->l);		\
+		ms &= !mf;						\
+		set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);	\
+	} while (0)
+
 void
 setup_tkeys(struct frequency *f)
 {
@@ -780,7 +796,6 @@ set_tier_offsets(struct frequency *f)
 
 	setup_tkeys(f);
 } // set_tier_offsets
-
 
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning the
