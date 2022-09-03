@@ -118,7 +118,7 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		if (mask & f->m)
 			continue;
 
-		register struct tier *t = f->sets + (mask & f->tm1);
+		register struct tier *t = f->sets + !!(mask & f->tm1);
 
 		// Determine the values for set and end
 		// The !! means we end up with only 0 or 1

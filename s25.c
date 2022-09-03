@@ -40,15 +40,17 @@ struct tier {
 
 // Character frequency recording
 static struct frequency {
-	struct tier	sets[2];	// Tier Sets
+	struct tier	sets[8];	// Tier Sets
 	uint32_t	m;		// Mask (1 << (c - 'a'))
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
 	uint32_t	tm3;		// Tiered Mask 3
+	uint32_t	tm4;		// Tiered Mask 4
+	uint32_t	tm5;		// Tiered Mask 5
 
-	uint32_t	pad[14];	// Pad to 64 bytes
 	int32_t		f;		// Frequency
 	atomic_int	pos;		// Position within a set
+	uint32_t	pad[7];		// Pad to 256 bytes
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -103,19 +105,21 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		if (mask & f->m)
 			continue;
 
-		register struct tier *t = f->sets + (mask & f->tm1);
+		register struct tier *t = f->sets + !!(mask & f->tm1) +
+						(2 * !!(mask & f->tm2)) +
+						(4 * !!(mask & f->tm3));
 
 		// Determine the values for set and end
 		// The !! means we end up with only 0 or 1
-		register int mt2 = !!(mask & f->tm2);
-		register int mt3 = !!(mask & f->tm3);
+		register int mf = !!(mask & f->tm4);	// Mask First
+		register int ms = !!(mask & f->tm5);	// Mask Second
 
 		// A branchless calculation of end
-		register uint32_t *end = t->s + (mt3 * t->toff3) + (!mt3 * t->l);
+		register uint32_t *end = t->s + (ms * t->toff3) + (!ms * t->l);
 
 		// A branchless calculation of set
-		mt3 &= !mt2;
-		register uint32_t *set = t->s + ((mt2 & !mt3) * t->toff2) + (mt3 * t->toff1);
+		ms &= !mf;
+		register uint32_t *set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);
 
 		while (set < end)
 			if (!((key = *set++) & mask))
@@ -256,6 +260,7 @@ main(int argc, char *argv[])
 	print_time_taken("Frequency Set Build", t2, t3);
 	print_time_taken("Main Algorithm", t3, t4);
 	print_time_taken("Emit Results", t4, t5);
+	printf("sizeof(struct frequency) = %lu\n", sizeof(struct frequency));
 
 	exit(0);
 } // main

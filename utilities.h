@@ -14,7 +14,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-static uint32_t	tkeys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
+static uint32_t	tkeys[MAX_WORDS * 6] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
@@ -593,6 +593,8 @@ set_tier_offsets(struct frequency *f)
 	f->tm1 = frq[25].m;
 	f->tm2 = frq[24].m;
 	f->tm3 = frq[23].m;
+	f->tm4 = frq[22].m;
+	f->tm5 = frq[21].m;
 
 	register uint32_t key, mask, len;
 	register uint32_t *ks, *kp;
@@ -600,7 +602,7 @@ set_tier_offsets(struct frequency *f)
 	// Organise full set into 2 subsets, that which
 	// has tm1 followed by that which does not
 
-	mask = f->tm2;
+	mask = f->tm4;
 
 	// First subset has tm1, and then now
 	ks = kp = t->s;
@@ -619,7 +621,7 @@ set_tier_offsets(struct frequency *f)
 	// the second tm1 subset into that which does not
 	// have tm2 followed by that which does
 
-	mask = f->tm3;
+	mask = f->tm5;
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
@@ -651,42 +653,56 @@ setup_tkeys(struct frequency *f, int num_poison)
 {
 	static uint32_t ntkeys = 0;
 	register struct tier *t0 = f->sets;
-	register struct tier *t1 = f->sets + 1;
-	register uint32_t *kp = tkeys + ntkeys, tm1 = f->tm1;
-	register uint32_t *ks, len, key;
+	register uint32_t tm1 = f->tm1, tm2 = f->tm2, tm3 = f->tm3;
+	register uint32_t *kp = tkeys + ntkeys, *ks, len, key;
+	uint32_t masks[8];
 
-	ks = t0->s;
-	t1->s = kp;
+	masks[0] = 0;
+	masks[1] = tm1;
+	masks[2] = tm2;
+	masks[3] = tm1 | tm2;
+	masks[4] = tm3;
+	masks[5] = tm3 | tm1;
+	masks[6] = tm3 | tm2;
+	masks[7] = tm3 | tm2 | tm1;
 
-	len = t0->toff1;
-	while (len--)
-		if (!((key = *ks++) & tm1))
-			*kp++ = key;
-	t1->toff1 = kp - t1->s;
+	for (uint32_t mask, i = 1; i < 8; i++) {
+		register struct tier *ts = f->sets + i;
+		mask = masks[i];
 
-	len = t0->toff2 - t0->toff1;
-	while (len--)
-		if (!((key = *ks++) & tm1))
-			*kp++ = key;
-	t1->toff2 = kp - t1->s;
+		ks = t0->s;
+		ts->s = kp;
 
-	len = t0->toff3 - t0->toff2;
-	while (len--)
-		if (!((key = *ks++) & tm1))
-			*kp++ = key;
-	t1->toff3 = kp - t1->s;
+		len = t0->toff1;
+		while (len--)
+			if (!((key = *ks++) & mask))
+				*kp++ = key;
+		ts->toff1 = kp - ts->s;
 
-	len = t0->l - t0->toff3;
-	while (len--)
-		if (!((key = *ks++) & tm1))
-			*kp++ = key;
-	t1->l = kp - t1->s;
+		len = t0->toff2 - t0->toff1;
+		while (len--)
+			if (!((key = *ks++) & mask))
+				*kp++ = key;
+		ts->toff2 = kp - ts->s;
 
-	for (register uint32_t p = num_poison; p--; )
-		*kp++ = (uint32_t)(~0);
+		len = t0->toff3 - t0->toff2;
+		while (len--)
+			if (!((key = *ks++) & mask))
+				*kp++ = key;
+		ts->toff3 = kp - ts->s;
+
+		len = t0->l - t0->toff3;
+		while (len--)
+			if (!((key = *ks++) & mask))
+				*kp++ = key;
+		ts->l = kp - ts->s;
+
+		for (register uint32_t p = num_poison; p--; )
+			*kp++ = (uint32_t)(~0);
+	}
 
 	ntkeys = kp - tkeys;
-//	printf("ntkeys = %u\n", ntkeys);
+	printf("ntkeys = %u\n", ntkeys);
 } // setup_tkeys
 
 
