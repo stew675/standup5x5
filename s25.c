@@ -74,9 +74,9 @@ static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 static void
 add_solution(uint32_t *solution)
 {
-	register int i, pos = atomic_fetch_add(&num_sol, 1);
-	register char *so = solutions + pos * 30;
-	register const char *wd;
+	int i, pos = atomic_fetch_add(&num_sol, 1);
+	char *so = solutions + pos * 30;
+	const char *wd;
 
 	for (i = 1; i < 6; i++) {
 		wd = hash_lookup(solution[i], words);
@@ -90,32 +90,32 @@ add_solution(uint32_t *solution)
 // Since find_solutions() is the busiest function we keep the loops
 // within it as small and tight as possible for the most speed
 void
-find_solutions(register int depth, register struct frequency *f, register uint32_t *solution,
-		register uint32_t mask, register uint32_t key, register int skipped)
+find_solutions(int depth, struct frequency *f, uint32_t *solution,
+		uint32_t mask, uint32_t key, int skipped)
 {
 	solution[depth] = key;
 	if (depth == 5)
 		return add_solution(solution);
 	mask |= key;
 
-	register struct frequency *e = frq + (min_search_depth + depth);
+	struct frequency *e = frq + (min_search_depth + depth);
 	for (; f < e; f++) {
 		if (mask & f->m)
 			continue;
 
-		register struct tier *t = f->sets + !!(mask & f->tm1);
+		struct tier *t = f->sets + !!(mask & f->tm1);
 
 		// Determine the values for set and end
 		// The !! means we end up with only 0 or 1
-		register int mt2 = !!(mask & f->tm2);
-		register int mt3 = !!(mask & f->tm3);
+		int mt2 = !!(mask & f->tm2);
+		int mt3 = !!(mask & f->tm3);
 
 		// A branchless calculation of end
-		register uint32_t *end = t->s + (mt3 * t->toff3) + (!mt3 * t->l);
+		uint32_t *end = t->s + (mt3 * t->toff3) + (!mt3 * t->l);
 
 		// A branchless calculation of set
 		mt3 &= !mt2;
-		register uint32_t *set = t->s + ((mt2 & !mt3) * t->toff2) + (mt3 * t->toff1);
+		uint32_t *set = t->s + ((mt2 & !mt3) * t->toff2) + (mt3 * t->toff1);
 
 		while (set < end)
 			if (!((key = *set++) & mask))
@@ -133,9 +133,9 @@ void
 solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
-	register struct frequency *f = frq;
-	register struct tier *t = f->sets;
-	register int32_t pos;
+	struct frequency *f = frq;
+	struct tier *t = f->sets;
+	int32_t pos;
 
 	// Solve starting with least frequent set
 	while ((pos = atomic_fetch_add(&f->pos, 1)) < t->l)

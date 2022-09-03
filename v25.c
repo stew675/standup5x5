@@ -76,11 +76,11 @@ static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 // ********************* SOLVER ALGORITHM ********************
 
 static void
-add_solution(register uint32_t *solution)
+add_solution(uint32_t *solution)
 {
-	register int i, pos = atomic_fetch_add(&num_sol, 1);
-	register char *so = solutions + pos * 30;
-	register const char *wd;
+	int i, pos = atomic_fetch_add(&num_sol, 1);
+	char *so = solutions + pos * 30;
+	const char *wd;
 
 	for (i = 1; i < 6; i++) {
 		wd = hash_lookup(solution[i], words);
@@ -92,7 +92,7 @@ add_solution(register uint32_t *solution)
 } // add_solution
 
 static inline uint32_t
-vscan(register uint32_t mask, register uint32_t *set)
+vscan(uint32_t mask, uint32_t *set)
 {
 	__m256i vmask = _mm256_set1_epi32(mask);
 	__m256i vkeys = _mm256_loadu_si256((__m256i *)set);
@@ -103,37 +103,37 @@ vscan(register uint32_t mask, register uint32_t *set)
 // find_solutions() which is the busiest loop is kept
 // as small and tight as possible for the most speed
 void
-find_solutions(register int depth, register struct frequency *f, register uint32_t mask,
-		register int skipped, register uint32_t *solution, register uint32_t key)
+find_solutions(int depth, struct frequency *f, uint32_t mask,
+		int skipped, uint32_t *solution, uint32_t key)
 {
 	solution[depth] = key;
 	if (depth == 5)
 		return add_solution(solution);
 	mask |= key;
 
-	register struct frequency *e = frq + (min_search_depth + depth);
+	struct frequency *e = frq + (min_search_depth + depth);
 	for (; f < e; f++) {
 		if (mask & f->m)
 			continue;
 
-		register struct tier *t = f->sets + !!(mask & f->tm1);
+		struct tier *t = f->sets + !!(mask & f->tm1);
 
 		// Determine the values for set and end
 		// The !! means we end up with only 0 or 1
-		register int mt2 = !!(mask & f->tm2);
-		register int mt3 = !!(mask & f->tm3);
+		int mt2 = !!(mask & f->tm2);
+		int mt3 = !!(mask & f->tm3);
 
 		// A branchless calculation of end
-		register uint32_t *end = t->s + (mt3 * t->toff3) + (!mt3 * t->l);
+		uint32_t *end = t->s + (mt3 * t->toff3) + (!mt3 * t->l);
 
 		// A branchless calculation of set
 		mt3 &= !mt2;
-		register uint32_t *set = t->s + ((mt2 & !mt3) * t->toff2) + (mt3 * t->toff1);
+		uint32_t *set = t->s + ((mt2 & !mt3) * t->toff2) + (mt3 * t->toff1);
 
 		for (; set < end; set += 8) {
-			register uint32_t vresmask = vscan(mask, set);
+			uint32_t vresmask = vscan(mask, set);
 			while (vresmask) {
-				register int i = __builtin_ctz(vresmask);
+				int i = __builtin_ctz(vresmask);
 				find_solutions(depth + 1, f + 1, mask, skipped, solution, set[i>>2]);
 				vresmask ^= (0xFU << i);
 			}
@@ -149,9 +149,9 @@ static void
 solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
-	register struct frequency *f = frq;
-	register struct tier *t;
-	register int32_t pos;
+	struct frequency *f = frq;
+	struct tier *t;
+	int32_t pos;
 
 	// Solve starting with least frequent set
 	t = f->sets;
