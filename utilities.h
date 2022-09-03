@@ -23,17 +23,18 @@ struct tier {
 
 // Character frequency recording
 static struct frequency {
-	struct tier	sets[8];	// Tier Sets
+	struct tier	sets[16];	// Tier Sets
 	uint32_t	m;		// Mask (1 << (c - 'a'))
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
 	uint32_t	tm3;		// Tiered Mask 3
 	uint32_t	tm4;		// Tiered Mask 4
 	uint32_t	tm5;		// Tiered Mask 5
+	uint32_t	tm6;		// Tiered Mask 6
 
 	int32_t		f;		// Frequency
 	atomic_int	pos;		// Position within a set
-	uint32_t	pad[7];		// Pad to 256 bytes
+	uint32_t	pad[7];		// Pad to 448 bytes (7 * 64)
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep frequently modified atomic variables on their own CPU cache line
@@ -65,8 +66,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-
-static uint32_t	tkeys[MAX_WORDS * 6] __attribute__ ((aligned(64)));
+static uint32_t	tkeys[MAX_WORDS * 10] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
@@ -645,6 +645,7 @@ set_tier_offsets(struct frequency *f)
 	f->tm3 = frq[23].m;
 	f->tm4 = frq[22].m;
 	f->tm5 = frq[21].m;
+	f->tm6 = frq[20].m;
 
 	uint32_t key, mask, len;
 	uint32_t *ks, *kp;
@@ -652,7 +653,7 @@ set_tier_offsets(struct frequency *f)
 	// Organise full set into 2 subsets, that which
 	// has tm1 followed by that which does not
 
-	mask = f->tm4;
+	mask = f->tm5;
 
 	// First subset has tm1, and then now
 	ks = kp = t->s;
@@ -671,7 +672,7 @@ set_tier_offsets(struct frequency *f)
 	// the second tm1 subset into that which does not
 	// have tm2 followed by that which does
 
-	mask = f->tm5;
+	mask = f->tm6;
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
@@ -703,20 +704,30 @@ setup_tkeys(struct frequency *f, int num_poison)
 {
 	static uint32_t	ntkeys = 0;
 	struct tier	*t0 = f->sets;
-	uint32_t	tm1 = f->tm1, tm2 = f->tm2, tm3 = f->tm3;
+	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
+	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
 	uint32_t	*kp = tkeys + ntkeys, *ks, len, key;
-	uint32_t	masks[8];
+	uint32_t	masks[16];
 
-	masks[0] = 0;
-	masks[1] = tm1;
-	masks[2] = tm2;
-	masks[3] = tm2 | tm1;
-	masks[4] = tm3;
-	masks[5] = tm3| tm1;
-	masks[6] = tm3| tm2;
-	masks[7] = tm3| tm2 | tm1;
+	masks[0]  = 0;
+	masks[1]  = tm1;
+	masks[2]  = tm2;
+	masks[3]  = tm2 | tm1;
+	masks[4]  = tm3;
+	masks[5]  = tm3 | tm1;
+	masks[6]  = tm3 | tm2;
+	masks[7]  = tm3 | tm2 | tm1;
 
-	for (uint32_t mask, i = 1; i < 8; i++) {
+	masks[8]  = tm4;
+	masks[9]  = tm4 | tm1;
+	masks[10] = tm4 | tm2;
+	masks[11] = tm4 | tm2 | tm1;
+	masks[12] = tm4 | tm3;
+	masks[13] = tm4 | tm3 | tm1;
+	masks[14] = tm4 | tm3 | tm2;
+	masks[15] = tm4 | tm3 | tm2 | tm1;
+
+	for (uint32_t mask, i = 1; i < 16; i++) {
 		struct tier *ts = f->sets + i;
 		mask = masks[i];
 
