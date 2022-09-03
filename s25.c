@@ -17,58 +17,6 @@
 #include <assert.h>
 #include <stdatomic.h>
 
-#define	MAX_SOLUTIONS	8192
-#define	MAX_WORDS	8192
-#define	MAX_THREADS	  64
-
-static const char	*solution_filename = "solutions.txt";
-
-// Worker thread state
-static struct worker {
-	char     *start;
-	char     *end;
-} workers[MAX_THREADS] __attribute__ ((aligned(64)));
-
-// Set Pointers
-struct tier {
-	uint32_t	*s;	// Pointer to set
-	uint32_t	l;	// Length of set
-	uint32_t	toff1;	// Tiered Offset 1
-	uint32_t	toff2;	// Tiered Offset 2
-	uint32_t	toff3;	// Tiered Offset 3
-};
-
-// Character frequency recording
-static struct frequency {
-	struct tier	sets[8];	// Tier Sets
-	uint32_t	m;		// Mask (1 << (c - 'a'))
-	uint32_t	tm1;		// Tiered Mask 1
-	uint32_t	tm2;		// Tiered Mask 2
-	uint32_t	tm3;		// Tiered Mask 3
-	uint32_t	tm4;		// Tiered Mask 4
-	uint32_t	tm5;		// Tiered Mask 5
-
-	int32_t		f;		// Frequency
-	atomic_int	pos;		// Position within a set
-	uint32_t	pad[7];		// Pad to 256 bytes
-} frq[26] __attribute__ ((aligned(64)));
-
-// Keep frequently modified atomic variables on their own CPU cache line
-atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
-atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
-atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
-atomic_int	readers_done = 0;
-atomic_int	solvers_done = 0;
-
-static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
-static int	write_metrics = 0;
-static int	nthreads = 0;
-static int	nkeys = 0;
-static uint32_t hash_collisions = 0;
-
-// We build the solutions directly as a character array to write out when done
-static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
-
 #include "utilities.h"
 
 // ********************* SOLUTION FUNCTIONS ********************
@@ -105,14 +53,12 @@ find_solutions(register int depth, register struct frequency *f, register uint32
 		if (mask & f->m)
 			continue;
 
-		register struct tier *t = f->sets + !!(mask & f->tm1) +
-						(2 * !!(mask & f->tm2)) +
-						(4 * !!(mask & f->tm3));
+		register struct tier *t = f->sets + !!(mask & f->tm1) + (2 * !!(mask & f->tm2));
 
 		// Determine the values for set and end
 		// The !! means we end up with only 0 or 1
-		register int mf = !!(mask & f->tm4);	// Mask First
-		register int ms = !!(mask & f->tm5);	// Mask Second
+		register int mf = !!(mask & f->tm3);	// Mask First
+		register int ms = !!(mask & f->tm4);	// Mask Second
 
 		// A branchless calculation of end
 		register uint32_t *end = t->s + (ms * t->toff3) + (!ms * t->l);
@@ -260,7 +206,6 @@ main(int argc, char *argv[])
 	print_time_taken("Frequency Set Build", t2, t3);
 	print_time_taken("Main Algorithm", t3, t4);
 	print_time_taken("Emit Results", t4, t5);
-	printf("sizeof(struct frequency) = %lu\n", sizeof(struct frequency));
 
 	exit(0);
 } // main

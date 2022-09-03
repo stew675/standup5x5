@@ -17,48 +17,7 @@
 #include <assert.h>
 #include <stdatomic.h>
 
-#define	MAX_SOLUTIONS	8192
-#define	MAX_WORDS	8192
-#define	MAX_THREADS	  64
-
-#define NO_BUILD_FREQUENCY_SETS
-
-static const char	*solution_filename = "solutions.txt";
-
-// Worker thread state
-static struct worker {
-	char *start;
-	char *end;
-} workers[MAX_THREADS] __attribute__ ((aligned(64)));
-
-// Character frequency recording
-static struct frequency {
-	uint32_t  *s;		// Pointer to set
-	uint32_t  *e;		// Pointer to end of set
-	uint32_t   m;		// Mask (1 << (c - 'a'))
-	int32_t    f;		// Frequency
-	int32_t    l;		// Length of set
-	atomic_int pos;		// Position within a set
-} frq[26] __attribute__ ((aligned(64)));
-
-// Keep frequently modified atomic variables on their own CPU cache line
-atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
-atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
-atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
-atomic_int	readers_done = 0;
-atomic_int	solvers_synced = 0;
-atomic_int	solvers_done = 0;
-
-static int	write_metrics __attribute__ ((aligned(64))) = 0;
-static int	nthreads = 0;
-static int	nkeys = 0;
-static uint32_t hash_collisions = 0;
-
-// We build the solutions directly as a character array to write out when done
-static char	solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
-
 #include "utilities.h"
-
 
 #if 0
 uint32_t num_combos = 0;
@@ -84,7 +43,6 @@ combo(int n, int r, int d)
 } //combo
 #endif
 
-
 void
 create_sets()
 {
@@ -93,15 +51,14 @@ create_sets()
 	qsort(frq, 26, sizeof(*frq), by_frequency_hi);
 
 	mask = frq[0].m;
-	frq[0].s = kp;
+	frq[0].sets[0].s = kp;
 	for (ks = kp; (key = *ks); ks++) {
 		if (key & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
 	}
-	frq[0].e = kp;
-	frq[0].l = kp - frq[0].s;
+	frq[0].sets[0].l = kp - frq[0].sets[0].s;
 
 	// 0-terminate this frequency key set
 	*ks++ = *kp;
@@ -110,9 +67,8 @@ create_sets()
 	// Ensure key set is 0 terminated for next loop
 	*ks = 0;
 
-	frq[1].s = kp;
-	frq[1].e = ks;
-	frq[1].l = ks - kp;
+	frq[1].sets[0].s = kp;
+	frq[1].sets[0].l = ks - kp;
 } // create_sets
 
 
@@ -204,12 +160,13 @@ gen_four_set(register uint32_t *s0, register uint32_t *s1, register uint32_t key
 atomic_int	four_pos = 0;
 atomic_size_t	spins = 0;
 atomic_int	driver_pos = 0;
+atomic_int	solvers_synced = 0;
 
 // A gormless attempt at a lockless way to process fourset
 static inline uint32_t
 apply_four()
 {
-	register uint32_t *zp = frq[0].s, key, *fp = fourset, pos, *f, *z;
+	register uint32_t *zp = frq[0].sets[0].s, key, *fp = fourset, pos, *f, *z;
 
 	do {
 		while (four_pos >= num_four) {
@@ -245,12 +202,12 @@ void
 solve_work()
 {
 	uint32_t scanbuf[4096];
-	register uint32_t *dp = frq[1].s, *sp = scanbuf;
+	register uint32_t *dp = frq[1].sets[0].s, *sp = scanbuf;
 
 	for (;;) {
 		register int pos = atomic_fetch_add(&driver_pos, 1);
 
-		if (pos >= frq[1].l)
+		if (pos >= frq[1].sets[0].l)
 			break;
 
 		register uint32_t *d = dp + pos;
@@ -369,8 +326,8 @@ main(int argc, char *argv[])
 	printf("Hash Collisions     = %8u\n", hash_collisions);
 	printf("Number of threads   = %8d\n", nthreads);
 	printf("Number of Four Sets = %8d\n", num_four);
-	printf("Zero Set Size       = %8d\n", frq[0].l);
-	printf("Driver Set Size     = %8d\n", frq[1].l);
+	printf("Zero Set Size       = %8d\n", frq[0].sets[0].l);
+	printf("Driver Set Size     = %8d\n", frq[1].sets[0].l);
 
 	printf("\nNUM SOLUTIONS = %d\n", num_sol);
 

@@ -1,5 +1,56 @@
-#define	HASHSZ            30383		// Emperically derived optimum
-#define MAX_READERS          15    	// Virtual systems don't like too many readers
+#define	HASHSZ          30383		// Emperically derived optimum
+#define MAX_READERS        15    	// Virtual systems don't like too many readers
+#define	MAX_SOLUTIONS    8192
+#define	MAX_WORDS        8192
+#define	MAX_THREADS        64
+
+static const char	*solution_filename = "solutions.txt";
+
+// Worker thread state
+static struct worker {
+	char     *start;
+	char     *end;
+} workers[MAX_THREADS] __attribute__ ((aligned(64)));
+
+// Set Pointers
+struct tier {
+	uint32_t	*s;	// Pointer to set
+	uint32_t	l;	// Length of set
+	uint32_t	toff1;	// Tiered Offset 1
+	uint32_t	toff2;	// Tiered Offset 2
+	uint32_t	toff3;	// Tiered Offset 3
+};
+
+// Character frequency recording
+static struct frequency {
+	struct tier	sets[8];	// Tier Sets
+	uint32_t	m;		// Mask (1 << (c - 'a'))
+	uint32_t	tm1;		// Tiered Mask 1
+	uint32_t	tm2;		// Tiered Mask 2
+	uint32_t	tm3;		// Tiered Mask 3
+	uint32_t	tm4;		// Tiered Mask 4
+	uint32_t	tm5;		// Tiered Mask 5
+
+	int32_t		f;		// Frequency
+	atomic_int	pos;		// Position within a set
+	uint32_t	pad[7];		// Pad to 256 bytes
+} frq[26] __attribute__ ((aligned(64)));
+
+// Keep frequently modified atomic variables on their own CPU cache line
+atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
+atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
+atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
+atomic_int	readers_done = 0;
+atomic_int	solvers_done = 0;
+
+static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
+static int	write_metrics = 0;
+static int	nthreads = 0;
+static int	nkeys = 0;
+static uint32_t hash_collisions = 0;
+
+// We build the solutions directly as a character array to write out when done
+static char     solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
 // Key Hash Entries
 // We keep keys and positions in separate array because faster to initialise
@@ -14,6 +65,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
+
 static uint32_t	tkeys[MAX_WORDS * 6] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
@@ -581,8 +633,6 @@ by_frequency_hi(const void *a, const void *b)
 	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
 } // by_frequency_hi
 
-#ifndef NO_BUILD_FREQUENCY_SETS
-
 // This function looks like it's doing a lot, but because of good spatial
 // and temportal localities each call typically takes ~1us on words_alpha
 void
@@ -602,7 +652,7 @@ set_tier_offsets(struct frequency *f)
 	// Organise full set into 2 subsets, that which
 	// has tm1 followed by that which does not
 
-	mask = f->tm4;
+	mask = f->tm3;
 
 	// First subset has tm1, and then now
 	ks = kp = t->s;
@@ -621,7 +671,7 @@ set_tier_offsets(struct frequency *f)
 	// the second tm1 subset into that which does not
 	// have tm2 followed by that which does
 
-	mask = f->tm5;
+	mask = f->tm4;
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
@@ -653,7 +703,7 @@ setup_tkeys(struct frequency *f, int num_poison)
 {
 	static uint32_t ntkeys = 0;
 	register struct tier *t0 = f->sets;
-	register uint32_t tm1 = f->tm1, tm2 = f->tm2, tm3 = f->tm3;
+	register uint32_t tm1 = f->tm1, tm2 = f->tm2;
 	register uint32_t *kp = tkeys + ntkeys, *ks, len, key;
 	uint32_t masks[8];
 
@@ -661,10 +711,6 @@ setup_tkeys(struct frequency *f, int num_poison)
 	masks[1] = tm1;
 	masks[2] = tm2;
 	masks[3] = tm1 | tm2;
-	masks[4] = tm3;
-	masks[5] = tm3 | tm1;
-	masks[6] = tm3 | tm2;
-	masks[7] = tm3 | tm2 | tm1;
 
 	for (uint32_t mask, i = 1; i < 8; i++) {
 		register struct tier *ts = f->sets + i;
@@ -755,5 +801,3 @@ setup_frequency_sets(int num_poison)
 		setup_tkeys(f, num_poison);
 	}
 } // setup_frequency_sets
-
-#endif
