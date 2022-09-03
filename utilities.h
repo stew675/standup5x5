@@ -12,7 +12,7 @@ static struct worker {
 	char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
-// Set Pointers
+// Set Pointers (24 bytes in size)
 struct tier {
 	uint32_t	*s;	// Pointer to set
 	uint32_t	l;	// Length of set
@@ -23,7 +23,6 @@ struct tier {
 
 // Character frequency recording
 static struct frequency {
-	struct tier	sets[16];	// Tier Sets
 	uint32_t	m;		// Mask (1 << (c - 'a'))
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
@@ -34,22 +33,26 @@ static struct frequency {
 
 	int32_t		f;		// Frequency
 	atomic_int	pos;		// Position within a set
-	uint32_t	pad[7];		// Pad to 448 bytes (7 * 64)
+	uint32_t	pad[7];		// Pad to 64 byte boundary
+
+	struct tier	sets[16];	// Tier Sets (384 bytes)
 } frq[26] __attribute__ ((aligned(64)));
 
-// Keep frequently modified atomic variables on their own CPU cache line
+// Keep atomic variables on their own CPU cache line
 atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
 atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
 atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
-atomic_int	readers_done = 0;
-atomic_int	solvers_done = 0;
+atomic_int	setup_set	__attribute__ ((aligned(64))) = 0;
+atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
+atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
+atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
 
+// Put general global variables on their own CPU cache line
 static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
 static uint32_t hash_collisions = 0;
-static uint32_t num_poison = NUM_POISON;
 
 // We build the solutions directly as a character array to write out when done
 static char     solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
@@ -73,6 +76,10 @@ static uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
 // alignment, this ensures all counters for each reader exist fully in 2 cache
 // lines independent to each reader, thereby minimising CPU cache contention
 static uint32_t cf[MAX_READERS][32] __attribute__ ((aligned(64))) = {0};
+
+static void solve();
+static void solve_work();
+static void set_tier_offsets(struct frequency *f);
 
 void
 print_time_taken(char *label, struct timespec *ts, struct timespec *te)
@@ -447,13 +454,6 @@ process_words()
 volatile int go_setup = 0;
 volatile int go_solve = 0;
 
-static void solve();
-static void solve_work();
-static void set_tier_offsets(struct frequency *f);
-
-atomic_int setup_set = 0;
-atomic_int setups_done = 0;
-
 void
 start_solvers()
 {
@@ -655,10 +655,11 @@ setup_tkeys(struct frequency *f)
 	struct tier	*t0 = f->sets;
 	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
 	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
-	uint32_t	*kp = t0->s + t0->l + num_poison;
+	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
 	uint32_t	*ks, len, key;
 	uint32_t	masks[16];
 
+	// XXX - Come up with a way to make this a loop
 	masks[0]  = 0;
 	masks[1]  = tm1;
 	masks[2]  = tm2;
@@ -708,7 +709,7 @@ setup_tkeys(struct frequency *f)
 				*kp++ = key;
 		ts->l = kp - ts->s;
 
-		for (uint32_t p = num_poison; p--; )
+		for (uint32_t p = NUM_POISON; p--; )
 			*kp++ = (uint32_t)(~0);
 	}
 } // setup_tkeys
@@ -719,6 +720,8 @@ static void
 set_tier_offsets(struct frequency *f)
 {
 	struct tier *t = f->sets;
+	uint32_t key, mask, len;
+	uint32_t *ks, *kp;
 
 	f->tm1 = frq[25].m;
 	f->tm2 = frq[24].m;
@@ -727,15 +730,12 @@ set_tier_offsets(struct frequency *f)
 	f->tm5 = frq[21].m;
 	f->tm6 = frq[20].m;
 
-	uint32_t key, mask, len;
-	uint32_t *ks, *kp;
-
 	// Organise full set into 2 subsets, that which
-	// has tm1 followed by that which does not
+	// has tm5 followed by that which does not
 
 	mask = f->tm5;
 
-	// First subset has tm1, and then now
+	// First subset has tm5, and then now
 	ks = kp = t->s;
 	len = t->l;
 	for (; len--; ks++) {
@@ -747,10 +747,10 @@ set_tier_offsets(struct frequency *f)
 	}
 	t->toff2 = kp - t->s;
 
-	// Now organise the first tm1 subset into that which
-	// has tm2 followed by that which does not, and then
-	// the second tm1 subset into that which does not
-	// have tm2 followed by that which does
+	// Now organise the first tm5 subset into that which
+	// has tm6 followed by that which does not, and then
+	// the second tm5 subset into that which does not
+	// have tm6 followed by that which does
 
 	mask = f->tm6;
 
@@ -766,7 +766,7 @@ set_tier_offsets(struct frequency *f)
 	}
 	t->toff1 = kp - t->s;
 
-	// Second tm1 subset does not have tm2 then has
+	// Second tm5 subset does not have tm6 then has
 	ks = kp = t->s + t->toff2;
 	len = t->l - t->toff2;
 	for (; len--; ks++) {
@@ -793,42 +793,36 @@ set_tier_offsets(struct frequency *f)
 void
 setup_frequency_sets()
 {
-	struct frequency *f = frq;
-	struct tier *t;
 	uint32_t *kp = keys;
 
-	qsort(f, 26, sizeof(*f), by_frequency_lo);
+	qsort(frq, 26, sizeof(*frq), by_frequency_lo);
 
 	// Now set up our scan sets by lowest frequency to highest
-	for (int i = 0; i < 26; i++, f++) {
+	for (int i = 0; i < 26; i++) {
+		struct frequency *f = frq + i;
+		struct tier *t = f->sets;
 		uint32_t mask = f->m, *ks = kp, *ts, key;
 
-		t = f->sets;
-		t->s = tkeys[i];
-		ts = t->s;
-
-		for (; (key = *ks); ks++)
+		t->s = (ts = tkeys[i]);
+		while((key = *ks))
 			if (key & mask) {
-				*ks = *kp;
+				*ks++ = *kp;
 				*kp++ = key;
 				*ts++ = key;
-			}
+			} else
+				ks++;
 
-		// Calculate the set length
-		t->l = ts - t->s;
-
-		// Update the min_search_depth if needed
-		if (t->l > 0)
+		// Calculate the set length and update
+		// the min_search_depth if needed
+		if ((t->l = ts - t->s) > 0)
 			min_search_depth = i - 3;
 
 		// We can't do aligned AVX loads with the tiered approach.
-		// "poison" num_poison ending values with all bits set
-		// and ensure key set is 0 terminated for next loop
-		for (uint32_t p = num_poison; p--; )
+		// "poison" NUM_POISON ending values with all bits set
+		for (uint32_t p = NUM_POISON; p--; )
 			*ts++ = (uint32_t)(~0);
-		*ks = 0;
 
-		// Calculate our tier offsets
+		// Calculate tier offsets if single threaded
 		if (nthreads == 1)
 			set_tier_offsets(f);
 	}
