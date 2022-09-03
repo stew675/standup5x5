@@ -444,9 +444,15 @@ process_words()
 	return spins;
 } // process_words
 
+volatile int go_setup = 0;
 volatile int go_solve = 0;
+
 static void solve();
 static void solve_work();
+static void set_tier_offsets(struct frequency *f);
+
+atomic_int setup_set = 0;
+atomic_int setups_done = 0;
 
 void
 start_solvers()
@@ -461,7 +467,7 @@ void *
 work_pool(void *arg)
 {
 	struct worker *work = (struct worker *)arg;
-	int worker_num = work - workers;
+	int worker_num = work - workers, set_num;
 
 	if (pthread_detach(pthread_self()))
 		perror("pthread_detach");
@@ -474,6 +480,14 @@ work_pool(void *arg)
 			pthread_t tid[1];
 			pthread_create(tid, NULL, work_pool, workers + i);
 		}
+
+	while (!go_setup)
+		asm("nop");
+
+	while ((set_num = atomic_fetch_add(&setup_set, 1)) < 26) {
+		set_tier_offsets(frq + set_num);
+		atomic_fetch_add(&setups_done, 1);
+	}
 	
 	// Not gonna lie.  This is ugly.  We're busy-waiting until we get
 	// told to start solving.  It shouldn't be for too long though...
@@ -635,72 +649,6 @@ by_frequency_hi(const void *a, const void *b)
 	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
 } // by_frequency_hi
 
-// This function looks like it's doing a lot, but because of good spatial
-// and temportal localities each call typically takes ~1us on words_alpha
-void
-set_tier_offsets(struct frequency *f)
-{
-	struct tier *t = f->sets;
-
-	f->tm1 = frq[25].m;
-	f->tm2 = frq[24].m;
-	f->tm3 = frq[23].m;
-	f->tm4 = frq[22].m;
-	f->tm5 = frq[21].m;
-	f->tm6 = frq[20].m;
-
-	uint32_t key, mask, len;
-	uint32_t *ks, *kp;
-
-	// Organise full set into 2 subsets, that which
-	// has tm1 followed by that which does not
-
-	mask = f->tm5;
-
-	// First subset has tm1, and then now
-	ks = kp = t->s;
-	len = t->l;
-	for (; len--; ks++) {
-		key = *ks;
-		if (key & mask) {
-			*ks = *kp;
-			*kp++ = key;
-		}
-	}
-	t->toff2 = kp - t->s;
-
-	// Now organise the first tm1 subset into that which
-	// has tm2 followed by that which does not, and then
-	// the second tm1 subset into that which does not
-	// have tm2 followed by that which does
-
-	mask = f->tm6;
-
-	// First tm1 subset has tm2 then not
-	ks = kp = t->s;
-	len = t->toff2;
-	for (; len--; ks++) {
-		key = *ks;
-		if (key & mask) {
-			*ks = *kp;
-			*kp++ = key;
-		}
-	}
-	t->toff1 = kp - t->s;
-
-	// Second tm1 subset does not have tm2 then has
-	ks = kp = t->s + t->toff2;
-	len = t->l - t->toff2;
-	for (; len--; ks++) {
-		key = *ks;
-		if (!(key & mask)) {
-			*ks = *kp;
-			*kp++ = key;
-		}
-	}
-	t->toff3 = kp - t->s;
-} // set_tier_offsets
-
 void
 setup_tkeys(struct frequency *f)
 {
@@ -765,6 +713,74 @@ setup_tkeys(struct frequency *f)
 	}
 } // setup_tkeys
 
+// This function looks like it's doing a lot, but because of good spatial
+// and temportal localities each call typically takes ~1us on words_alpha
+static void
+set_tier_offsets(struct frequency *f)
+{
+	struct tier *t = f->sets;
+
+	f->tm1 = frq[25].m;
+	f->tm2 = frq[24].m;
+	f->tm3 = frq[23].m;
+	f->tm4 = frq[22].m;
+	f->tm5 = frq[21].m;
+	f->tm6 = frq[20].m;
+
+	uint32_t key, mask, len;
+	uint32_t *ks, *kp;
+
+	// Organise full set into 2 subsets, that which
+	// has tm1 followed by that which does not
+
+	mask = f->tm5;
+
+	// First subset has tm1, and then now
+	ks = kp = t->s;
+	len = t->l;
+	for (; len--; ks++) {
+		key = *ks;
+		if (key & mask) {
+			*ks = *kp;
+			*kp++ = key;
+		}
+	}
+	t->toff2 = kp - t->s;
+
+	// Now organise the first tm1 subset into that which
+	// has tm2 followed by that which does not, and then
+	// the second tm1 subset into that which does not
+	// have tm2 followed by that which does
+
+	mask = f->tm6;
+
+	// First tm1 subset has tm2 then not
+	ks = kp = t->s;
+	len = t->toff2;
+	for (; len--; ks++) {
+		key = *ks;
+		if (key & mask) {
+			*ks = *kp;
+			*kp++ = key;
+		}
+	}
+	t->toff1 = kp - t->s;
+
+	// Second tm1 subset does not have tm2 then has
+	ks = kp = t->s + t->toff2;
+	len = t->l - t->toff2;
+	for (; len--; ks++) {
+		key = *ks;
+		if (!(key & mask)) {
+			*ks = *kp;
+			*kp++ = key;
+		}
+	}
+	t->toff3 = kp - t->s;
+
+	setup_tkeys(f);
+} // set_tier_offsets
+
 
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning the
@@ -813,8 +829,14 @@ setup_frequency_sets()
 		*ks = 0;
 
 		// Calculate our tier offsets
-		set_tier_offsets(f);
-		setup_tkeys(f);
+		if (nthreads == 1)
+			set_tier_offsets(f);
+	}
+
+	if (nthreads > 1) {
+		go_setup = 1;
+		while(setups_done < 26)
+			asm("nop");
 	}
 } // setup_frequency_sets
 
