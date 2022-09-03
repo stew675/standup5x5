@@ -20,6 +20,7 @@
 // NUM_POISON must be defined before include utilities.h
 #define	NUM_POISON	0
 #define DONT_INCLUDE_MAIN
+#define NO_FREQ_SETUP
 
 #include "utilities.h"
 

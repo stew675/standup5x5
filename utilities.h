@@ -467,7 +467,7 @@ void *
 work_pool(void *arg)
 {
 	struct worker *work = (struct worker *)arg;
-	int worker_num = work - workers, set_num;
+	int worker_num = work - workers;
 
 	if (pthread_detach(pthread_self()))
 		perror("pthread_detach");
@@ -481,6 +481,9 @@ work_pool(void *arg)
 			pthread_create(tid, NULL, work_pool, workers + i);
 		}
 
+#ifndef NO_FREQ_SETUP
+	int set_num;
+
 	while (!go_setup)
 		asm("nop");
 
@@ -488,6 +491,7 @@ work_pool(void *arg)
 		set_tier_offsets(frq + set_num);
 		atomic_fetch_add(&setups_done, 1);
 	}
+#endif
 	
 	// Not gonna lie.  This is ugly.  We're busy-waiting until we get
 	// told to start solving.  It shouldn't be for too long though...
