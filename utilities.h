@@ -47,12 +47,17 @@ atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
 
+// Put volatile thread sync variables on their own CPU cache line
+volatile int	go_setup	__attribute__ ((aligned(64))) = 0;
+volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
+
 // Put general global variables on their own CPU cache line
 static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
+static uint32_t hash_collisions = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
-static uint32_t hash_collisions = 0;
+static int	num_readers = 0;
 
 // We build the solutions directly as a character array to write out when done
 static char     solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
@@ -403,8 +408,6 @@ file_reader(struct worker *work)
 	atomic_fetch_add(&readers_done, 1);
 } // file_reader
 
-static int num_readers = 0;
-
 uint64_t
 process_words()
 {
@@ -450,9 +453,6 @@ process_words()
 
 	return spins;
 } // process_words
-
-volatile int go_setup = 0;
-volatile int go_solve = 0;
 
 void
 start_solvers()
