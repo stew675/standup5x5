@@ -127,10 +127,10 @@ get_nthreads()
 
 // Given a 5 letter word, calculate the bit-map representation of that word
 static inline uint32_t
-calc_key(register const char *wd)
+calc_key(const char *wd)
 {
-	register uint32_t one = 1, a = 'a';
-	register uint32_t key;
+	uint32_t one = 1, a = 'a';
+	uint32_t key;
 
 	key  = (one << (*wd++ - a));
 	key |= (one << (*wd++ - a));
@@ -147,9 +147,9 @@ calc_key(register const char *wd)
 // lookup words given the key representation of that word
 #define key_hash(x)	(x % HASHSZ)
 uint32_t
-hash_insert(register uint32_t key, register uint32_t pos)
+hash_insert(uint32_t key, uint32_t pos)
 {
-	register uint32_t col = 0, hashpos = key_hash(key);
+	uint32_t col = 0, hashpos = key_hash(key);
 
 	do {
 		// Check if we can insert at this position
@@ -178,9 +178,9 @@ hash_insert(register uint32_t key, register uint32_t pos)
 } // hash_insert
 
 const char *
-hash_lookup(register uint32_t key, register const char *wp)
+hash_lookup(uint32_t key, const char *wp)
 {
-	register uint32_t col = 0, hashpos = key_hash(key);
+	uint32_t col = 0, hashpos = key_hash(key);
 
 	do {
 		// Check for a match
@@ -209,11 +209,11 @@ hash_lookup(register uint32_t key, register const char *wp)
 // ********************* FILE READER ********************
 
 void
-process_five_word(register char *w, register uint32_t *ft)
+process_five_word(char *w, uint32_t *ft)
 {
-	register uint32_t key = calc_key(w);
+	uint32_t key = calc_key(w);
 	if (__builtin_popcount(key) == 5) {
-		register int pos = atomic_fetch_add(&num_words, 1);
+		int pos = atomic_fetch_add(&num_words, 1);
 
 		// Get the key into the list as soon as possible
 		// to prevent holding up the hash table builder
@@ -221,8 +221,8 @@ process_five_word(register char *w, register uint32_t *ft)
 
 		// Update frequency table and
 		// copy word at the same time
-		register char a = 'a';
-		register char *to = words + (5 * pos);
+		char a = 'a';
+		char *to = words + (5 * pos);
 		ft[(*to++ = *w++) - a]++;
 		ft[(*to++ = *w++) - a]++;
 		ft[(*to++ = *w++) - a]++;
@@ -241,10 +241,10 @@ process_five_word(register char *w, register uint32_t *ft)
 #endif
 
 void
-find_words(register char *s, register char *e, uint32_t rn)
+find_words(char *s, char *e, uint32_t rn)
 {
-	register char a = 'a', z = 'z', nl = '\n';
-	register uint32_t *ft = cf[rn];
+	char a = 'a', z = 'z', nl = '\n';
+	uint32_t *ft = cf[rn];
 
 #ifdef USE_AVX2_SCAN
 	// The following code makes the assumption that all
@@ -260,23 +260,23 @@ find_words(register char *s, register char *e, uint32_t rn)
 
 	e -= 64;
 	while (s < e) {
-		register int pos = 0;
+		int pos = 0;
 
 		// Unaligned load of a vector with the next 32 characters
 		__m512i wvec = _mm512_loadu_si512((const __m512i_u *)s);
 
 		// Find the newlines in the word vector
 		// nmask will have a 1-bit for every newline in the vector
-		register uint64_t nmask = _mm512_cmpeq_epi8_mask(nvec, wvec);
+		uint64_t nmask = _mm512_cmpeq_epi8_mask(nvec, wvec);
 
 		// Find the lower-case letters in the word vector
 		// wmask will have a 0-bit for every lower-case letter in the vector
-		register uint64_t wmask = _mm512_cmp_epi8_mask(wvec, avec, _MM_CMPINT_LT) |
+		uint64_t wmask = _mm512_cmp_epi8_mask(wvec, avec, _MM_CMPINT_LT) |
 					  _mm512_cmp_epi8_mask(zvec, wvec, _MM_CMPINT_LT);
 
 		// Get number of newlines in the vector  NB: __builtin_popcount()
 		// against a 64-bit value is SLOW, so we do it this way for speed
-		register int nls = __builtin_popcount((uint32_t)(nmask >> 32)) +
+		int nls = __builtin_popcount((uint32_t)(nmask >> 32)) +
 				   __builtin_popcount((uint32_t)(nmask & 0xffffffff));
 
 		// Handle words over 32 characters in length
@@ -305,7 +305,7 @@ find_words(register char *s, register char *e, uint32_t rn)
 
 	e -= 32;
 	while (s < e) {
-		register int pos = 0;
+		int pos = 0;
 
 		// Unaligned load of a vector with the next 32 characters
 		__m256i wvec = _mm256_loadu_si256((const __m256i_u *)s);
@@ -313,16 +313,16 @@ find_words(register char *s, register char *e, uint32_t rn)
 		// Find the newlines in the word vector
 		// nmask will have a 1-bit for every newline in the vector
 		__m256i nres = _mm256_cmpeq_epi8(nvec, wvec);
-		register uint32_t nmask = _mm256_movemask_epi8(nres);
+		uint32_t nmask = _mm256_movemask_epi8(nres);
 
 		// Find the lower-case letters in the word vector
 		// wmask will have a 0-bit for every lower-case letter in the vector
 		__m256i wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec),
 					       _mm256_cmpgt_epi8(wvec, zvec));
-		register uint32_t wmask = _mm256_movemask_epi8(wres);
+		uint32_t wmask = _mm256_movemask_epi8(wres);
 
 		// Get number of newlines in the vector
-		register int nls = __builtin_popcount(nmask);
+		int nls = __builtin_popcount(nmask);
 
 		// Handle words over 32 characters in length
 		if (nls == 0) {
@@ -345,7 +345,7 @@ find_words(register char *s, register char *e, uint32_t rn)
 #endif
 #endif
 
-	register char c, *w;
+	char c, *w;
 	for (w = s; s < e; w = s) {
 		c = *s++; if ((c < a) || (c > z)) continue;
 		c = *s++; if ((c < a) || (c > z)) continue;
@@ -375,9 +375,9 @@ file_reader(struct worker *work)
 	// processing the chunk before it can catch the word that may
 	// have been skipped by the reader ahead of it
 	do {
-		register char *s = work->start;
+		char *s = work->start;
 		s += atomic_fetch_add(&file_pos, READ_CHUNK);
-		register char *e = s + (READ_CHUNK + 1);
+		char *e = s + (READ_CHUNK + 1);
 
 		if (s > work->end)
 			break;
@@ -400,7 +400,7 @@ static int num_readers = 0;
 uint64_t
 process_words()
 {
-	register uint64_t spins = 0;
+	uint64_t spins = 0;
 
 	// We do hash_init() and frq_init() here after the reader threads
 	// start. This speeds up application load time as the OS needs to
@@ -409,7 +409,7 @@ process_words()
 
 	// Build hash table and final key set
 	hash_init();
-	for (register uint32_t *k = keys, key, pos = 0; ;) {
+	for (uint32_t *k = keys, key, pos = 0; ;) {
 		if (pos >= num_words) {
 			if (readers_done < num_readers) {
 				spins++;
@@ -638,7 +638,7 @@ by_frequency_hi(const void *a, const void *b)
 void
 set_tier_offsets(struct frequency *f)
 {
-	register struct tier *t = f->sets;
+	struct tier *t = f->sets;
 
 	f->tm1 = frq[25].m;
 	f->tm2 = frq[24].m;
@@ -646,13 +646,13 @@ set_tier_offsets(struct frequency *f)
 	f->tm4 = frq[22].m;
 	f->tm5 = frq[21].m;
 
-	register uint32_t key, mask, len;
-	register uint32_t *ks, *kp;
+	uint32_t key, mask, len;
+	uint32_t *ks, *kp;
 
 	// Organise full set into 2 subsets, that which
 	// has tm1 followed by that which does not
 
-	mask = f->tm3;
+	mask = f->tm4;
 
 	// First subset has tm1, and then now
 	ks = kp = t->s;
@@ -671,7 +671,7 @@ set_tier_offsets(struct frequency *f)
 	// the second tm1 subset into that which does not
 	// have tm2 followed by that which does
 
-	mask = f->tm4;
+	mask = f->tm5;
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
@@ -701,19 +701,23 @@ set_tier_offsets(struct frequency *f)
 void
 setup_tkeys(struct frequency *f, int num_poison)
 {
-	static uint32_t ntkeys = 0;
-	register struct tier *t0 = f->sets;
-	register uint32_t tm1 = f->tm1, tm2 = f->tm2;
-	register uint32_t *kp = tkeys + ntkeys, *ks, len, key;
-	uint32_t masks[8];
+	static uint32_t	ntkeys = 0;
+	struct tier	*t0 = f->sets;
+	uint32_t	tm1 = f->tm1, tm2 = f->tm2, tm3 = f->tm3;
+	uint32_t	*kp = tkeys + ntkeys, *ks, len, key;
+	uint32_t	masks[8];
 
 	masks[0] = 0;
 	masks[1] = tm1;
 	masks[2] = tm2;
-	masks[3] = tm1 | tm2;
+	masks[3] = tm2 | tm1;
+	masks[4] = tm3;
+	masks[5] = tm3| tm1;
+	masks[6] = tm3| tm2;
+	masks[7] = tm3| tm2 | tm1;
 
-	for (uint32_t mask, i = 1; i < 4; i++) {
-		register struct tier *ts = f->sets + i;
+	for (uint32_t mask, i = 1; i < 8; i++) {
+		struct tier *ts = f->sets + i;
 		mask = masks[i];
 
 		ks = t0->s;
@@ -743,7 +747,7 @@ setup_tkeys(struct frequency *f, int num_poison)
 				*kp++ = key;
 		ts->l = kp - ts->s;
 
-		for (register uint32_t p = num_poison; p--; )
+		for (uint32_t p = num_poison; p--; )
 			*kp++ = (uint32_t)(~0);
 	}
 
@@ -763,15 +767,15 @@ setup_tkeys(struct frequency *f, int num_poison)
 void
 setup_frequency_sets(int num_poison)
 {
-	register struct frequency *f = frq;
-	register struct tier *t;
-	register uint32_t *kp = keys;
+	struct frequency *f = frq;
+	struct tier *t;
+	uint32_t *kp = keys;
 
 	qsort(f, 26, sizeof(*f), by_frequency_lo);
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
-		register uint32_t mask = f->m, *ks = kp, key;
+		uint32_t mask = f->m, *ks = kp, key;
 		t = f->sets;
 
 		for (t->s = kp; (key = *ks); ks++)
@@ -790,7 +794,7 @@ setup_frequency_sets(int num_poison)
 		// We can't do aligned AVX loads with the tiered approach.
 		// "poison" num_poison ending values with all bits set
 		// and ensure key set is 0 terminated for next loop
-		for (register uint32_t p = num_poison; p--; ) {
+		for (uint32_t p = num_poison; p--; ) {
 			*ks++ = *kp;
 			*kp++ = (uint32_t)(~0);
 		}

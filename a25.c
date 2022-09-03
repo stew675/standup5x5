@@ -46,7 +46,7 @@ combo(int n, int r, int d)
 void
 create_sets()
 {
-	register uint32_t *kp = keys, mask, *ks, key;
+	uint32_t *kp = keys, mask, *ks, key;
 
 	qsort(frq, 26, sizeof(*frq), by_frequency_hi);
 
@@ -76,9 +76,9 @@ create_sets()
 static inline void
 add_solution_real(uint32_t *solution)
 {
-	register int i, pos = atomic_fetch_add(&num_sol, 1);
-	register char *so = solutions + pos * 30;
-	register const char *wd;
+	int i, pos = atomic_fetch_add(&num_sol, 1);
+	char *so = solutions + pos * 30;
+	const char *wd;
 
 	for (i = 1; i < 6; i++) {
 		wd = hash_lookup(solution[i], words);
@@ -111,8 +111,8 @@ uint32_t   fourset[6291456] = {0};
 static inline void
 add_fourset(uint32_t key0, uint32_t key1, uint32_t key2, uint32_t key3)
 {
-	register uint32_t mask = (key0 | key1 | key2 | key3);
-	register uint32_t *f = fourset + (atomic_fetch_add(&num_four, 1) * 6);
+	uint32_t mask = (key0 | key1 | key2 | key3);
+	uint32_t *f = fourset + (atomic_fetch_add(&num_four, 1) * 6);
 
 	*f++ = mask; *f++ = key0; *f++ = key1; *f++ = key2; *f++ = key3;
 	*f = FOUR_READY;
@@ -123,12 +123,12 @@ add_fourset(uint32_t key0, uint32_t key1, uint32_t key2, uint32_t key3)
 // s0, s1 remain fixed
 // s2, s3 can change depending upon what is found
 static inline void
-gen_four_set(register uint32_t *s0, register uint32_t *s1, register uint32_t key0)
+gen_four_set(uint32_t *s0, uint32_t *s1, uint32_t key0)
 {
-	register uint32_t *k1 = s0, scan, key1;
+	uint32_t *k1 = s0, scan, key1;
 
 	while ((key1 = *k1++)) {
-		register uint32_t *k2 = k1, *s2 = s1, key2;
+		uint32_t *k2 = k1, *s2 = s1, key2;
 
 		while ((scan = *k2++))
 			if (!(key1 & scan))
@@ -136,7 +136,7 @@ gen_four_set(register uint32_t *s0, register uint32_t *s1, register uint32_t key
 
 		*s2++ = 0, k2 = s1;
 		while ((key2 = *k2++)) {
-			register uint32_t *k3 = k2, *s3 = s2, key3;
+			uint32_t *k3 = k2, *s3 = s2, key3;
 
 			while ((scan = *k3++))
 				if (!(key2 & scan))
@@ -144,7 +144,7 @@ gen_four_set(register uint32_t *s0, register uint32_t *s1, register uint32_t key
 
 			*s3++ = 0, k3 = s2;
 			while ((key3 = *k3++)) {
-				register uint32_t *k4 = k3;
+				uint32_t *k4 = k3;
 
 				while ((scan = *k4++))
 					if (!(key3 & scan))
@@ -166,7 +166,7 @@ atomic_int	solvers_synced = 0;
 static inline uint32_t
 apply_four()
 {
-	register uint32_t *zp = frq[0].sets[0].s, key, *fp = fourset, pos, *f, *z;
+	uint32_t *zp = frq[0].sets[0].s, key, *fp = fourset, pos, *f, *z;
 
 	do {
 		while (four_pos >= num_four) {
@@ -202,17 +202,17 @@ void
 solve_work()
 {
 	uint32_t scanbuf[4096];
-	register uint32_t *dp = frq[1].sets[0].s, *sp = scanbuf;
+	uint32_t *dp = frq[1].sets[0].s, *sp = scanbuf;
 
 	for (;;) {
-		register int pos = atomic_fetch_add(&driver_pos, 1);
+		int pos = atomic_fetch_add(&driver_pos, 1);
 
 		if (pos >= frq[1].sets[0].l)
 			break;
 
-		register uint32_t *d = dp + pos;
-		register uint32_t *s = sp;
-		register uint32_t key, scan;
+		uint32_t *d = dp + pos;
+		uint32_t *s = sp;
+		uint32_t key, scan;
 
 		// Build the scanbuf at this level
 		key = *d++;
