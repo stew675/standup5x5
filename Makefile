@@ -5,7 +5,7 @@
 #
 # Use gcc for consistent optimization behavior
 
-all: a25 s25 v25 #525
+all: a25 s25 v25 525
 
 CC=clang-12
 #CC=gcc
@@ -22,8 +22,8 @@ s25: s25.c utilities.h Makefile
 v25: v25.c utilities.h Makefile
 	$(CC) $(CFLAGS) -o $@ v25.c $(LIBS)
 
-#525: 525.c utilities.h Makefile
-#	$(CC) $(CFLAGS) -o $@ 525.c $(LIBS)
+525: 525.c utilities.h Makefile
+	$(CC) $(CFLAGS) -o $@ 525.c $(LIBS)
 
 check:
 	/bin/sh ./check.sh

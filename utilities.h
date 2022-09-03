@@ -748,7 +748,7 @@ setup_tkeys(struct frequency *f, int num_poison)
 	}
 
 	ntkeys = kp - tkeys;
-	printf("ntkeys = %u\n", ntkeys);
+//	printf("ntkeys = %u\n", ntkeys);
 } // setup_tkeys
 
 
