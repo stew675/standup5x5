@@ -712,7 +712,7 @@ setup_tkeys(struct frequency *f, int num_poison)
 	masks[2] = tm2;
 	masks[3] = tm1 | tm2;
 
-	for (uint32_t mask, i = 1; i < 8; i++) {
+	for (uint32_t mask, i = 1; i < 4; i++) {
 		register struct tier *ts = f->sets + i;
 		mask = masks[i];
 
