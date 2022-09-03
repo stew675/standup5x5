@@ -40,12 +40,12 @@ the loading of the full 4MB words_alpha.txt file:
 
 **a25** takes around 18ms to complete, using 16 threads
 
-**s25** takes around 2.5ms to complete using 16 threads
+**s25** takes around 1.3ms to complete using 16 threads
 
-**v25** takes around 1.4ms to complete using 16 threads
+**v25** takes around 0.9ms to complete using 16 threads
 
-**525** won't run on my AMD system.  On my Intel laptop it takes 2.6ms to complete
-using 8 threads.  I estimate that on a full desktop runtimes of 1.2ms should be achievable
+**525** won't run on my AMD system.  On my Intel laptop it takes 1.6ms to complete
+using 8 threads.  I estimate that on a full desktop runtimes of 0.8ms should be achievable
 
 All algorithms use a bit-wise representation of the words for efficiency of comparing
 
@@ -243,7 +243,8 @@ Update:  The `master` branch has 3rd tier code now
 
 The `multi-tier-experiment` branch utilises 6 tiers, but for high thread
 numbers it is slower than 3-tier due to setup overhead.  This is also true
-for 4 and 5 tiers.
+for 4 and 5 tiers.  For single-threaded use though, 6-tiers is way faster
+with the non-AVX `s25` version completing in just 7.2ms for a single thread.
 
 ### To Do
 
