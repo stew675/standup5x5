@@ -17,6 +17,9 @@
 #include <assert.h>
 #include <stdatomic.h>
 
+// NUM_POISON must be defined before include utilities.h
+#define	NUM_POISON 0
+
 #include "utilities.h"
 
 // ********************* SOLUTION FUNCTIONS ********************
@@ -114,99 +117,3 @@ solve()
 	while(solvers_done < nthreads)
 		usleep(1);
 } // solve
-
-int
-main(int argc, char *argv[])
-{
-	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
-	char file[256];
-
-	// Copy in a default file-name
-	strcpy(file, "words_alpha.txt");
-
-	nthreads = get_nthreads();
-
-	if (argc > 1) {
-		for (int i = 1; i < argc; i++) {
-			if (!strncmp(argv[i], "-v", 2)) {
-				write_metrics = 1;
-				continue;
-			}
-
-			if (!strncmp(argv[i], "-f", 2)) {
-				if ((i + 1) < argc) {
-					strncpy(file, argv[i+1], 255);
-					file[255] = '\0';
-					i++;
-					continue;
-				}
-			}
-
-			if (!strncmp(argv[i], "-t", 2)) {
-				if ((i + 1) < argc) {
-					nthreads = atoi(argv[i+1]);
-					i++;
-					if (nthreads < 0)
-						nthreads = 1;
-					if (nthreads > MAX_THREADS)
-						nthreads = MAX_THREADS;
-					continue;
-				}
-			}
-
-			printf("Usage: %s [-v] [-t num_threads] [-f filename]\n", argv[0]);
-			exit(1);
-		}
-	}
-
-	if (nthreads <= 0)
-		nthreads = 1;
-	if (nthreads > MAX_THREADS)
-		nthreads = MAX_THREADS;
-
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
-
-	read_words(file);
-
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
-
-	setup_frequency_sets(1);
-
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
-
-	solve();
-
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t4);
-
-	emit_solutions();
-
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t5);
-
-	if (!write_metrics)
-		exit(0);
-
-	printf("\nFrequency Table:\n");
-	for (int i = 0; i < 26; i++) {
-		char c = 'a' + __builtin_ctz(frq[i].m);
-		struct tier *t = frq[i].sets;
-		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
-			c, t->l, t->toff1, t->toff2, t->toff3);
-	}
-	printf("\n\n");
-
-	printf("Num Unique Words  = %8d\n", nkeys);
-	printf("Hash Collisions   = %8u\n", hash_collisions);
-	printf("Number of threads = %8d\n", nthreads);
-
-	printf("\nNUM SOLUTIONS = %d\n", num_sol);
-
-	printf("\nTIMES TAKEN :\n");
-	print_time_taken("Total", t1, t5);
-	printf("\n");
-	print_time_taken("File Load", t1, t2);
-	print_time_taken("Frequency Set Build", t2, t3);
-	print_time_taken("Main Algorithm", t3, t4);
-	print_time_taken("Emit Results", t4, t5);
-
-	exit(0);
-} // main

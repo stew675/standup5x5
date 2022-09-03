@@ -49,6 +49,7 @@ static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
 static uint32_t hash_collisions = 0;
+static uint32_t num_poison = NUM_POISON;
 
 // We build the solutions directly as a character array to write out when done
 static char     solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
@@ -66,7 +67,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-static uint32_t	tkeys[MAX_WORDS * 10] __attribute__ ((aligned(64)));
+static uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
@@ -444,6 +445,7 @@ process_words()
 } // process_words
 
 volatile int go_solve = 0;
+static void solve();
 static void solve_work();
 
 void
@@ -700,13 +702,13 @@ set_tier_offsets(struct frequency *f)
 } // set_tier_offsets
 
 void
-setup_tkeys(struct frequency *f, int num_poison)
+setup_tkeys(struct frequency *f)
 {
-	static uint32_t	ntkeys = 0;
 	struct tier	*t0 = f->sets;
 	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
 	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
-	uint32_t	*kp = tkeys + ntkeys, *ks, len, key;
+	uint32_t	*kp = t0->s + t0->l + num_poison;
+	uint32_t	*ks, len, key;
 	uint32_t	masks[16];
 
 	masks[0]  = 0;
@@ -761,9 +763,6 @@ setup_tkeys(struct frequency *f, int num_poison)
 		for (uint32_t p = num_poison; p--; )
 			*kp++ = (uint32_t)(~0);
 	}
-
-	ntkeys = kp - tkeys;
-//	printf("ntkeys = %u\n", ntkeys);
 } // setup_tkeys
 
 
@@ -776,7 +775,7 @@ setup_tkeys(struct frequency *f, int num_poison)
 // spatial and temporal locality principles, and so runs in ~42us in practise
 // without factoring in the calls to set_tier_offsets()
 void
-setup_frequency_sets(int num_poison)
+setup_frequency_sets()
 {
 	struct frequency *f = frq;
 	struct tier *t;
@@ -786,17 +785,21 @@ setup_frequency_sets(int num_poison)
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++, f++) {
-		uint32_t mask = f->m, *ks = kp, key;
-		t = f->sets;
+		uint32_t mask = f->m, *ks = kp, *ts, key;
 
-		for (t->s = kp; (key = *ks); ks++)
+		t = f->sets;
+		t->s = tkeys[i];
+		ts = t->s;
+
+		for (; (key = *ks); ks++)
 			if (key & mask) {
 				*ks = *kp;
 				*kp++ = key;
+				*ts++ = key;
 			}
 
 		// Calculate the set length
-		t->l = kp - t->s;
+		t->l = ts - t->s;
 
 		// Update the min_search_depth if needed
 		if (t->l > 0)
@@ -805,14 +808,114 @@ setup_frequency_sets(int num_poison)
 		// We can't do aligned AVX loads with the tiered approach.
 		// "poison" num_poison ending values with all bits set
 		// and ensure key set is 0 terminated for next loop
-		for (uint32_t p = num_poison; p--; ) {
-			*ks++ = *kp;
-			*kp++ = (uint32_t)(~0);
-		}
+		for (uint32_t p = num_poison; p--; )
+			*ts++ = (uint32_t)(~0);
 		*ks = 0;
 
 		// Calculate our tier offsets
 		set_tier_offsets(f);
-		setup_tkeys(f, num_poison);
+		setup_tkeys(f);
 	}
 } // setup_frequency_sets
+
+#ifndef DONT_INCLUDE_MAIN
+
+// ********************* MAIN SETUP AND OUTPUT ********************
+
+int
+main(int argc, char *argv[])
+{
+	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
+	char file[256];
+
+	// Copy in the default file-name
+	strcpy(file, "words_alpha.txt");
+
+	nthreads = get_nthreads();
+
+	if (argc > 1) {
+		for (int i = 1; i < argc; i++) {
+			if (!strncmp(argv[i], "-v", 2)) {
+				write_metrics = 1;
+				continue;
+			}
+
+			if (!strncmp(argv[i], "-f", 2)) {
+				if ((i + 1) < argc) {
+					strncpy(file, argv[i+1], 255);
+					file[255] = '\0';
+					i++;
+					continue;
+				}
+			}
+
+			if (!strncmp(argv[i], "-t", 2)) {
+				if ((i + 1) < argc) {
+					nthreads = atoi(argv[i+1]);
+					i++;
+					if (nthreads < 0)
+						nthreads = 1;
+					if (nthreads > MAX_THREADS)
+						nthreads = MAX_THREADS;
+					continue;
+				}
+			}
+
+			printf("Usage: %s [-v] [-t num_threads] [-f filename]\n", argv[0]);
+			exit(1);
+		}
+	}
+
+	if (nthreads <= 0)
+		nthreads = 1;
+	if (nthreads > MAX_THREADS)
+		nthreads = MAX_THREADS;
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
+
+	read_words(file);
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
+
+	setup_frequency_sets();
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
+
+	solve();
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t4);
+
+	emit_solutions();
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t5);
+
+	if (!write_metrics)
+		exit(0);
+
+	printf("\nFrequency Table:\n");
+	for (int i = 0; i < 26; i++) {
+		struct tier *t = frq[i].sets;
+		char c = 'a' + __builtin_ctz(frq[i].m);
+		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
+			c, t->l, t->toff1, t->toff2, t->toff3);
+	}
+	printf("\n\n");
+
+	printf("Num Unique Words  = %8d\n", nkeys);
+	printf("Hash Collisions   = %8u\n", hash_collisions);
+	printf("Number of threads = %8d\n", nthreads);
+
+	printf("\nNUM SOLUTIONS = %d\n", num_sol);
+
+	printf("\nTIMES TAKEN :\n");
+	print_time_taken("Total", t1, t5);
+	printf("\n");
+	print_time_taken("File Load", t1, t2);
+	print_time_taken("Frequency Set Build", t2, t3);
+	print_time_taken("Main Algorithm", t3, t4);
+	print_time_taken("Emit Results", t4, t5);
+
+	exit(0);
+} // main
+
+#endif

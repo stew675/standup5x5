@@ -17,6 +17,10 @@
 #include <assert.h>
 #include <stdatomic.h>
 
+// NUM_POISON must be defined before include utilities.h
+#define	NUM_POISON	0
+#define DONT_INCLUDE_MAIN
+
 #include "utilities.h"
 
 #if 0
