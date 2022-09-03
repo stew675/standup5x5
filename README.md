@@ -40,12 +40,12 @@ the loading of the full 4MB words_alpha.txt file:
 
 **a25** takes around 18ms to complete, using 16 threads
 
-**s25** takes around 2.5ms to complete using 16 threads
+**s25** takes around 1.3ms to complete using 16 threads
 
-**v25** takes around 1.4ms to complete using 16 threads
+**v25** takes around 0.9ms to complete using 16 threads
 
-**525** won't run on my AMD system.  On my Intel laptop it takes 2.6ms to complete
-using 8 threads.  I estimate that on a full desktop runtimes of 1.2ms should be achievable
+**525** won't run on my AMD system.  On my Intel laptop it takes 1.6ms to complete
+using 8 threads.  I estimate that on a full desktop runtimes of 0.8ms should be achievable
 
 All algorithms use a bit-wise representation of the words for efficiency of comparing
 
@@ -235,13 +235,20 @@ v25.c is now capable of finding all 538 solutions on my system in under 1ms
 including loading the 4MB words-alpha.txt file, solving, and writing the
 results out.  Even using just a single thread takes under 6ms.
 
-Where Landon's approach uses the 5 most frequently occurring characters to
+Where Landon's approach uses the 6 most frequently occurring characters to
 create subsets from, the hybrid solution only uses 2, and it is still slightly
 slower than Landon's solution for a single thread scenario for non-AVX mode.
 
+Update:  The `master` branch has 3rd tier code now
+
+The `multi-tier-experiment` branch utilises 6 tiers, but for high thread
+numbers it is slower than 3-tier due to setup overhead.  This is also true
+for 4 and 5 tiers.  For single-threaded use though, 6-tiers is way faster
+with the non-AVX `s25` version completing in just 7.2ms for a single thread.
+
 ### To Do
 
-Add a 3rd or even 4th tier to the hybrid solution (currently in development).
+Work on parallelising the tier setup code
 
 ### Conclusion
 
