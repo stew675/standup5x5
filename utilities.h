@@ -833,8 +833,26 @@ setup_frequency_sets()
 			set_tier_offsets(f);
 	}
 
+	// Start concurrent search set setup
 	if (nthreads > 1) {
 		go_setup = 1;
+
+		// Help out a bit
+		while (1) {
+			int set_num = atomic_fetch_add(&setup_set, 1);
+
+			if (set_num >= 26)
+				break;
+
+			set_tier_offsets(frq + set_num);
+			atomic_fetch_add(&setups_done, 1);
+
+			// Break out a little early to be
+			// ready to start the next phase
+			if (set_num > 9)
+				break;
+		}
+
 		while(setups_done < 26)
 			asm("nop");
 	}
