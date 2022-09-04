@@ -42,8 +42,8 @@ static struct frequency {
 atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
 atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
 atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
-atomic_int	setup_set	__attribute__ ((aligned(64))) = 0;
-atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
+atomic_int	setup_set	__attribute__ ((aligned(64))) = 1;
+atomic_int	setups_done	__attribute__ ((aligned(64))) = 1;
 atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
 
@@ -722,51 +722,63 @@ setup_tkeys(struct frequency *f)
 } // setup_tkeys
 
 static inline void
-set_tm(int32_t *counts, uint32_t *tm)
+set_tm(struct tier *t, uint32_t zero, uint32_t mask, uint32_t *tm)
 {
-	int32_t ibest = 0, cmin = 1000000;
-
-	for (int i = 0; i < 26; i++)
-		if (counts[i] < cmin) {
-			cmin = counts[i];
-			ibest = i;
-		}
-
-//	printf("   %c %u\n", 'a' + ibest, counts[ibest]);
-	*tm = 1 << ibest;
-	counts[ibest] = 1000000;
-} // set_tm
-
-static void
-set_tms(struct frequency *f)
-{
-	struct tier *t = f->sets;
-	int32_t counts[26] = {0};
-	uint32_t key, target, *ks = t->s, len = t->l;
+	uint32_t counts[26] = {0};
+	uint32_t *ks = t->s, len = t->l;
 
 	// Get frequency counts
 	while (len--) {
-		key = *ks++;
+		uint32_t key = *ks++;
+		if (key & mask)
+			continue;
 		while (key) {
 			int i = __builtin_ctz(key);
 			counts[i]++;
 			key ^= (1 << i);
 		}
 	}
+	counts[zero] = 0;
+
+	int32_t imax = 0, cmax = 0;
+	for (int i = 0; i < 26; i++)
+		if (counts[i] > cmax) {
+			cmax = counts[i];
+			imax = i;
+		}
+
+//	printf("   %c %u\n", 'a' + imax, counts[imax]);
+	*tm = 1 << imax;
+} // set_tm
+
+static void
+set_tms(struct frequency *f)
+{
+	struct tier *t = f->sets;
+	uint32_t zero = __builtin_ctz(f->m);
+
+	if (t->l < 16)
+		return;
 
 //	printf("%c\n", 'a' + __builtin_ctz(f->m));
-	target = counts[__builtin_ctz(f->m)] / 2;
 
-	for (int i = 0; i < 26; i++)
-		if ((counts[i] -= target) < 0)
-			counts[i] = -counts[i];
+	uint32_t mask = 0;
+	set_tm(t, zero, mask, &f->tm1);
 
-	set_tm(counts, &f->tm1);
-	set_tm(counts, &f->tm2);
-	set_tm(counts, &f->tm3);
-	set_tm(counts, &f->tm4);
-	set_tm(counts, &f->tm5);
-	set_tm(counts, &f->tm6);
+	mask |= f->tm1;
+	set_tm(t, zero, mask, &f->tm2);
+
+	mask |= f->tm2;
+	set_tm(t, zero, mask, &f->tm3);
+
+	mask |= f->tm3;
+	set_tm(t, zero, mask, &f->tm4);
+
+	mask |= f->tm4;
+	set_tm(t, zero, mask, &f->tm5);
+
+	mask |= f->tm5;
+	set_tm(t, zero, mask, &f->tm6);
 } // set_tms
 
 // This function looks like it's doing a lot, but because of good spatial
@@ -778,16 +790,15 @@ set_tier_offsets(struct frequency *f)
 	uint32_t key, mask, len;
 	uint32_t *ks, *kp;
 
-	set_tms(f);
-
-#if 0
+	// Setup defaults.  set_tms() may alter these
 	f->tm1 = frq[25].m;
 	f->tm2 = frq[24].m;
 	f->tm3 = frq[23].m;
 	f->tm4 = frq[22].m;
 	f->tm5 = frq[21].m;
 	f->tm6 = frq[20].m;
-#endif
+
+	set_tms(f);
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
@@ -899,7 +910,7 @@ setup_frequency_sets()
 			*ts++ = (uint32_t)(~0);
 
 		// Calculate tier offsets if single threaded
-		if (nthreads == 1)
+		if (nthreads == 1 && i > 0)
 			set_tier_offsets(f);
 	}
 
