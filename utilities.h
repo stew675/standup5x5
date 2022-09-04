@@ -735,27 +735,27 @@ setup_tkeys(struct frequency *f)
 } // setup_tkeys
 
 static inline void
-set_tm(uint32_t *counts, uint32_t *tm)
+set_tm(int32_t *counts, uint32_t *tm)
 {
-	uint32_t imax = 0, cmax = 0;
+	int32_t ibest = 0, cmin = 1000000;
 
 	for (int i = 0; i < 26; i++)
-		if (counts[i] > cmax) {
-			cmax = counts[i];
-			imax = i;
+		if (counts[i] < cmin) {
+			cmin = counts[i];
+			ibest = i;
 		}
 
-//	printf("   %c %u\n", 'a' + imax, counts[imax]);
-	*tm = 1 << imax;
-	counts[imax] = 0;
+//	printf("   %c %u\n", 'a' + ibest, counts[ibest]);
+	*tm = 1 << ibest;
+	counts[ibest] = 1000000;
 } // set_tm
 
 static void
 set_tms(struct frequency *f)
 {
 	struct tier *t = f->sets;
-	uint32_t counts[26] = {0}, *ks = t->s, len = t->l;
-	uint32_t key;
+	int32_t counts[26] = {0};
+	uint32_t key, target, *ks = t->s, len = t->l;
 
 	// Get frequency counts
 	while (len--) {
@@ -768,7 +768,12 @@ set_tms(struct frequency *f)
 	}
 
 //	printf("%c\n", 'a' + __builtin_ctz(f->m));
-	counts[__builtin_ctz(f->m)] = 0;
+	target = counts[__builtin_ctz(f->m)] / 2;
+
+	for (int i = 0; i < 26; i++)
+		if ((counts[i] -= target) < 0)
+			counts[i] = -counts[i];
+
 	set_tm(counts, &f->tm1);
 	set_tm(counts, &f->tm2);
 	set_tm(counts, &f->tm3);
@@ -787,6 +792,15 @@ set_tier_offsets(struct frequency *f)
 	uint32_t *ks, *kp;
 
 	set_tms(f);
+
+#if 0
+	f->tm1 = frq[25].m;
+	f->tm2 = frq[24].m;
+	f->tm3 = frq[23].m;
+	f->tm4 = frq[22].m;
+	f->tm5 = frq[21].m;
+	f->tm6 = frq[20].m;
+#endif
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
