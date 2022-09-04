@@ -40,11 +40,11 @@ the loading of the full 4MB words_alpha.txt file:
 
 **a25** takes around 18ms to complete, using 16 threads
 
-**s25** takes around 1.08ms to complete using 16 threads
+**s25** takes around 0.98ms to complete using 16 threads
 
-**v25** takes around 0.88ms to complete using 16 threads
+**v25** takes around 0.82ms to complete using 16 threads
 
-**525** won't run on my AMD system.  On my Intel laptop it takes 1.5ms to complete
+**525** won't run on my AMD system.  On my Intel laptop it takes 1.35ms to complete
 using 8 threads.  I estimate that on a full desktop runtimes of 0.80ms should be achievable
 
 All algorithms use a bit-wise representation of the words for efficiency of comparing
@@ -197,7 +197,7 @@ https://github.com/GuiltyBystander/5words
 
 Landon had come up with the most efficient implementation of the search problem
 I'd ever seen.  Truly fantastic work!  Landon says that he arrived at his
-solution also fairly independely, but at its core it uses the same basic
+solution also fairly independently, but at its core it uses the same basic
 algorithm that Sylvester and myself had found.
 
 Where Landon went one step further is that he had added a further breakdown of
@@ -223,7 +223,7 @@ thread.  I think we can implement a solution true to his original vision in a
 highly parallelised manner, but it would be a fair amount of work.
 
 So instead I worked with Landon to arrive at a hybrid solution that isn't as
-element or as flexible as Landon's core solution, but preserves the strong
+elegant or as flexible as Landon's core solution, but preserves the strong
 spatial locality inherent in the "pointers within a single set" approach that
 my solution implements.
 
@@ -245,6 +245,10 @@ I was able to parallelise the tier setup paths.  This has resulted in the setup
 for 6 tiers taking only 10us more than the setup for 3 tiers.  As a result, the
 6 tier path is now the fastest in all scenarios.
 
+Update 2:  I discovered a low-CPU-cost way to calculate the best characteres to
+use to split subsets for each character set.  Main algorithm compares were
+reduced by 33%.
+
 
 ### Conclusion
 
@@ -255,4 +259,5 @@ since that's what people seem to be doing, so I included the full set here.
 
 Thank you to Matt Parker for making the problem public, and all the intelligent
 and robust discussion of solutions in the Youtube comments, and a big thank you
-to Sylvester Hesp for his approach to the set skipping issue.
+to Sylvester Hesp for his approach to the set skipping issue, and to Landon
+Kryger for his insightful algorithm improvements!
