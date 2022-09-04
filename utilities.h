@@ -24,6 +24,7 @@ struct tier {
 // Character frequency recording
 static struct frequency {
 	uint32_t	m;		// Mask (1 << (c - 'a'))
+	int32_t		f;		// Frequency
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
 	uint32_t	tm3;		// Tiered Mask 3
@@ -31,7 +32,6 @@ static struct frequency {
 	uint32_t	tm5;		// Tiered Mask 5
 	uint32_t	tm6;		// Tiered Mask 6
 
-	int32_t		f;		// Frequency
 	atomic_int	pos;		// Position within a set
 	uint32_t	pad[7];		// Pad to 64 byte boundary
 
@@ -634,19 +634,6 @@ emit_solutions()
 
 // ********************* FREQUENCY HANDLER ********************
 
-// Sort lowest to highest, but treat 0 values as "infinite"
-int
-by_frequency_lo(const void *a, const void *b)
-{
-	if (((struct frequency *)a)->f == ((struct frequency *)b)->f)
-		return 0;
-	if (((struct frequency *)a)->f == 0)
-		return 1;
-	if (((struct frequency *)b)->f == 0)
-		return -1;
-	return ((struct frequency *)a)->f - ((struct frequency *)b)->f;
-} // by_frequency_lo
-
 int
 by_frequency_hi(const void *a, const void *b)
 {
@@ -853,6 +840,24 @@ set_tier_offsets(struct frequency *f)
 	setup_tkeys(f);
 } // set_tier_offsets
 
+// Specialised frequency sort, since we only need to swap the
+// first 8 bytes of frequency sets at this point in time
+void
+fsort()
+{
+	for (int i = 1; i < 26; i++)
+		for (int j = i; j; j--) {
+			if (frq[j].f == 0)
+				break;
+			if (frq[j - 1].f && (frq[j].f > frq[j - 1].f))
+				break;
+			// Swap
+			uint64_t tmp = *(uint64_t *)(frq + j);
+			*(uint64_t *)(frq + j) = *(uint64_t *)(frq + (j - 1));
+			*(uint64_t *)(frq + (j - 1)) = tmp;
+		}
+} // fsort
+
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning the
 // remainder and so on until all keys have been assigned to sets. It achieves
@@ -866,7 +871,7 @@ setup_frequency_sets()
 {
 	uint32_t *kp = keys;
 
-	qsort(frq, 26, sizeof(*frq), by_frequency_lo);
+	fsort();
 
 	// Now set up our scan sets by lowest frequency to highest
 	for (int i = 0; i < 26; i++) {
