@@ -734,6 +734,49 @@ setup_tkeys(struct frequency *f)
 	}
 } // setup_tkeys
 
+static inline void
+set_tm(uint32_t *counts, uint32_t *tm)
+{
+	uint32_t imax = 0, cmax = 0;
+
+	for (int i = 0; i < 26; i++)
+		if (counts[i] > cmax) {
+			cmax = counts[i];
+			imax = i;
+		}
+
+//	printf("   %c %u\n", 'a' + imax, counts[imax]);
+	*tm = 1 << imax;
+	counts[imax] = 0;
+} // set_tm
+
+static void
+set_tms(struct frequency *f)
+{
+	struct tier *t = f->sets;
+	uint32_t counts[26] = {0}, *ks = t->s, len = t->l;
+	uint32_t key;
+
+	// Get frequency counts
+	while (len--) {
+		key = *ks++;
+		while (key) {
+			int i = __builtin_ctz(key);
+			counts[i]++;
+			key ^= (1 << i);
+		}
+	}
+
+//	printf("%c\n", 'a' + __builtin_ctz(f->m));
+	counts[__builtin_ctz(f->m)] = 0;
+	set_tm(counts, &f->tm1);
+	set_tm(counts, &f->tm2);
+	set_tm(counts, &f->tm3);
+	set_tm(counts, &f->tm4);
+	set_tm(counts, &f->tm5);
+	set_tm(counts, &f->tm6);
+} // set_tms
+
 // This function looks like it's doing a lot, but because of good spatial
 // and temportal localities each call typically takes ~1us on words_alpha
 static void
@@ -743,12 +786,7 @@ set_tier_offsets(struct frequency *f)
 	uint32_t key, mask, len;
 	uint32_t *ks, *kp;
 
-	f->tm1 = frq[25].m;
-	f->tm2 = frq[24].m;
-	f->tm3 = frq[23].m;
-	f->tm4 = frq[22].m;
-	f->tm5 = frq[21].m;
-	f->tm6 = frq[20].m;
+	set_tms(f);
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
