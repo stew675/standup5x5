@@ -33,7 +33,9 @@ static struct frequency {
 	uint32_t	tm6;		// Tiered Mask 6
 
 	atomic_int	pos;		// Position within a set
-	uint32_t	pad[7];		// Pad to 64 byte boundary
+	int		ready_to_setup;	//
+	int		ready_to_use;	//
+	uint32_t	pad[5];		// Pad to 64 byte boundary
 
 	struct tier	sets[16];	// Tier Sets (384 bytes)
 } frq[26] __attribute__ ((aligned(64)));
@@ -42,13 +44,12 @@ static struct frequency {
 atomic_int 	num_words	__attribute__ ((aligned(64))) = 0;
 atomic_int	file_pos	__attribute__ ((aligned(64))) = 0;
 atomic_int	num_sol		__attribute__ ((aligned(64))) = 0;
-atomic_int	setup_set	__attribute__ ((aligned(64))) = 1;
-atomic_int	setups_done	__attribute__ ((aligned(64))) = 1;
+atomic_int	setup_set	__attribute__ ((aligned(64))) = 0;
+atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
 
 // Put volatile thread sync variables on their own CPU cache line
-volatile int	go_setup	__attribute__ ((aligned(64))) = 0;
 volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
 
 // Put general global variables on their own CPU cache line
@@ -482,14 +483,13 @@ work_pool(void *arg)
 		}
 
 #ifndef NO_FREQ_SETUP
-	int set_num;
+	while (1) {
+		int set_num = atomic_fetch_add(&setup_set, 1);
 
-	while (!go_setup)
-		asm("nop");
+		if (set_num >= 26)
+			break;
 
-	while ((set_num = atomic_fetch_add(&setup_set, 1)) < 26) {
 		set_tier_offsets(frq + set_num);
-		atomic_fetch_add(&setups_done, 1);
 	}
 #endif
 	
@@ -790,6 +790,14 @@ set_tier_offsets(struct frequency *f)
 	uint32_t key, mask, len;
 	uint32_t *ks, *kp;
 
+	// Skip first set.  Nothing uses its subsets
+	if (f == frq)
+		goto set_tier_offsets_done;
+
+	// Wait here until all data is ready
+	while (!f->ready_to_setup)
+		asm("nop");
+
 	// Setup defaults.  set_tms() may alter these
 	f->tm1 = frq[25].m;
 	f->tm2 = frq[24].m;
@@ -849,10 +857,16 @@ set_tier_offsets(struct frequency *f)
 	t->toff3 = kp - t->s;
 
 	setup_tkeys(f);
+
+	// Mark as done and ready
+set_tier_offsets_done:
+	f->ready_to_use = 1;
+	atomic_fetch_add(&setups_done, 1);
 } // set_tier_offsets
 
-// Specialised frequency sort, since we only need to swap the
-// first 8 bytes of frequency sets at this point in time
+// Specialised frequency sort, since we only need to swap the first 8 bytes
+// of frequency sets at this point in time and each frequency set structure
+// can be many hundreds of bytes, which wastes time if qsort is used
 void
 fsort()
 {
@@ -862,7 +876,7 @@ fsort()
 				break;
 			if (frq[j - 1].f && (frq[j].f > frq[j - 1].f))
 				break;
-			// Swap
+			// Swap first 8 bytes
 			uint64_t tmp = *(uint64_t *)(frq + j);
 			*(uint64_t *)(frq + j) = *(uint64_t *)(frq + (j - 1));
 			*(uint64_t *)(frq + (j - 1)) = tmp;
@@ -909,34 +923,16 @@ setup_frequency_sets()
 		for (uint32_t p = NUM_POISON; p--; )
 			*ts++ = (uint32_t)(~0);
 
-		// Calculate tier offsets if single threaded
-		if (nthreads == 1 && i > 0)
+		// Instruct any waiting worker thread to start setup
+		// but we have to do it ourselves if single threaded
+		f->ready_to_setup = 1;
+		if (nthreads == 1)
 			set_tier_offsets(f);
 	}
 
-	// Start concurrent search set setup
-	if (nthreads > 1) {
-		go_setup = 1;
-
-		// Help out a bit
-		while (1) {
-			int set_num = atomic_fetch_add(&setup_set, 1);
-
-			if (set_num >= 26)
-				break;
-
-			set_tier_offsets(frq + set_num);
-			atomic_fetch_add(&setups_done, 1);
-
-			// Break out a little early to be
-			// ready to start the next phase
-			if (set_num > 9)
-				break;
-		}
-
-		while(setups_done < 26)
-			asm("nop");
-	}
+	// Wait for all setups to complete
+	while(setups_done < 26)
+		asm("nop");
 } // setup_frequency_sets
 
 #ifndef DONT_INCLUDE_MAIN
