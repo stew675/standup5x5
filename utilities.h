@@ -4,7 +4,7 @@
 #define	MAX_WORDS        8192
 #define	MAX_THREADS        64
 
-#define NUM_SETS	    0		// Must be in the range 0..11 inclusive
+#define NUM_SETS	    3		// Must be in the range 0..11 inclusive
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -45,6 +45,10 @@ atomic_int	setup_set	__attribute__ ((aligned(64))) = 0;
 atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
+atomic_int	probs_ready	__attribute__ ((aligned(64))) = 0;
+
+// Probabilities of characters being seen
+double		probs[32]	__attribute__ ((aligned(64))) = {0};
 
 // Put volatile thread sync variables on their own CPU cache line
 volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
@@ -710,50 +714,70 @@ setup_tkeys(struct frequency *f)
 } // setup_tkeys
 
 static inline void
-set_tm(struct tier *t, uint32_t zero, uint32_t mask, uint32_t *tm)
+set_tm(double *myprobs, uint32_t *tm)
 {
-	uint32_t counts[26] = {0};
-	uint32_t *ks = t->s, len = t->l;
-
-	// Get frequency counts
-	while (len--) {
-		uint32_t key = *ks++;
-		if (key & mask)
-			continue;
-		while (key) {
-			int i = __builtin_ctz(key);
-			counts[i]++;
-			key ^= (1 << i);
-		}
-	}
-	counts[zero] = 0;
-
-	int32_t imax = 0, cmax = 0;
+	double	cmax = 0;
+	int32_t	imax = 0;
 	for (int i = 0; i < 26; i++)
-		if (counts[i] > cmax) {
-			cmax = counts[i];
+		if (myprobs[i] > cmax) {
+			cmax = myprobs[i];
 			imax = i;
 		}
 
-//	printf("   %c %u\n", 'a' + imax, counts[imax]);
+//	printf("   %c %7.5f\n", 'a' + imax, myprobs[imax]);
 	*tm = 1 << imax;
+	myprobs[imax] = 0;
 } // set_tm
 
 static void
 set_tms(struct frequency *f)
 {
-	struct tier *t = f->sets;
 	uint32_t zero = __builtin_ctz(f->m);
+	struct tier *t = f->sets;
+	uint32_t *ks = t->s, len = t->l;
+	double myprobs[26] = {0};
+	int fnum = f - frq;
 
-	if (t->l < 16)
-		return;
+	// Get frequency counts
+	while (len--) {
+		uint32_t key = *ks++;
+		while (key) {
+			int i = __builtin_ctz(key);
+			myprobs[i] += 1;
+			key ^= (1 << i);
+		}
+	}
+	len = t->l;
+
+	// Wait for our turn
+	while (fnum > probs_ready)
+		asm("nop");
 
 //	printf("%c\n", 'a' + zero);
 
-	for (uint32_t mask = 0, i = 0; i < (NUM_SETS + 2); i++) {
-		set_tm(t, zero, mask, &f->tm[i]);
-		mask |= f->tm[i];
+	double myp = (1.0 - probs[zero]);
+	for (int i = 0; i < 26; i++) {
+		double p = (myprobs[i] /= len);
+		double ph = probs[i];
+
+		myprobs[i] *= ph;
+
+		// Include probability of even reaching this letter itself
+		p *= myp;
+		probs[i] = 1.0 - ((1.0 - p) * (1.0 - ph));
+
+//		printf("   %c %7.5f\n", 'a' + i, myprobs[i]);
 	}
+
+	myprobs[zero] = 0;
+//	probs[zero] = 0;
+
+	// Let the next worker proceed
+	atomic_fetch_add(&probs_ready, 1);
+
+	// Now actually set our tms
+	for (uint32_t i = 0; i < (NUM_SETS + 2); i++)
+		set_tm(myprobs, &f->tm[i]);
 } // set_tms
 
 // This function looks like it's doing a lot, but because of good spatial
@@ -765,10 +789,6 @@ set_tier_offsets(struct frequency *f)
 	uint32_t key, mask, len;
 	uint32_t *ks, *kp;
 
-	// Skip first set.  Nothing uses its subsets
-	if (f == frq)
-		goto set_tier_offsets_done;
-
 	// Wait here until all data is ready
 	while (!f->ready_to_setup)
 		asm("nop");
@@ -778,6 +798,10 @@ set_tier_offsets(struct frequency *f)
 		f->tm[i] = frq[25-i].m;
 
 	set_tms(f);
+
+	// Skip first set.  Nothing uses its subsets
+	if (f == frq)
+		goto set_tier_offsets_done;
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
