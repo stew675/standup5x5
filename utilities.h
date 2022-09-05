@@ -4,6 +4,8 @@
 #define	MAX_WORDS        8192
 #define	MAX_THREADS        64
 
+#define NUM_SETS	    0		// Must be in the range 0..11 inclusive
+
 static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
@@ -23,20 +25,16 @@ struct tier {
 
 // Character frequency recording
 static struct frequency {
-	uint32_t	m;		// Mask (1 << (c - 'a'))
-	int32_t		f;		// Frequency
-	uint32_t	tm1;		// Tiered Mask 1
-	uint32_t	tm2;		// Tiered Mask 2
-	uint32_t	tm3;		// Tiered Mask 3
-	uint32_t	tm4;		// Tiered Mask 4
-	uint32_t	tm5;		// Tiered Mask 5
-	uint32_t	tm6;		// Tiered Mask 6
+	uint32_t	m;			// Mask (1 << (c - 'a'))
+	int32_t		f;			// Frequency
+	int		ready_to_setup;		// Worker thread notification
+	uint32_t	tm[13];			// Ends on 64-byte boundary
 
-	atomic_int	pos;		// Position within a set
-	int		ready_to_setup;	//
-	uint32_t	pad[6];		// Pad to 64 byte boundary
+	// Position within a set
+	atomic_int	pos __attribute__ ((aligned(64)));
 
-	struct tier	sets[16];	// Tier Sets (384 bytes)
+	// Tier Sets
+	struct tier	sets[1<<(NUM_SETS)] __attribute__ ((aligned(64)));
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -635,12 +633,14 @@ by_frequency_hi(const void *a, const void *b)
 // The !! means we end up with only 0 or 1
 #define CALCULATE_SET_AND_END						\
 	do {								\
-		struct tier *t = f->sets + !!(mask & f->tm1) +		\
-					(!!(mask & f->tm2) << 1) +	\
-					(!!(mask & f->tm3) << 2) +	\
-					(!!(mask & f->tm4) << 3);	\
-		int mf = !!(mask & f->tm5);				\
-		int ms = !!(mask & f->tm6);				\
+		int tier_num = 0;					\
+		for (int i = 0; i < NUM_SETS; i++)			\
+			tier_num += (!!(mask & f->tm[i]) << i);		\
+		struct tier *t = f->sets + tier_num;			\
+									\
+		int mf = !!(mask & f->tm[NUM_SETS]);			\
+		int ms = !!(mask & f->tm[NUM_SETS + 1]);		\
+									\
 		end = t->s + (ms * t->toff3) + (!ms * t->l);		\
 		ms &= !mf;						\
 		set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);	\
@@ -650,32 +650,22 @@ void
 setup_tkeys(struct frequency *f)
 {
 	struct tier	*t0 = f->sets;
-	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
-	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
 	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
 	uint32_t	*ks, len, key;
-	uint32_t	masks[16];
+	uint32_t	masks[1 << NUM_SETS];
 
-	// XXX - Come up with a way to make this a loop
-	masks[0]  = 0;
-	masks[1]  = tm1;
-	masks[2]  = tm2;
-	masks[3]  = tm2 | tm1;
-	masks[4]  = tm3;
-	masks[5]  = tm3 | tm1;
-	masks[6]  = tm3 | tm2;
-	masks[7]  = tm3 | tm2 | tm1;
+	for (uint32_t i = 0; i < (1 << NUM_SETS); i++) {
+		uint32_t mask = i, tmask = 0;
 
-	masks[8]  = tm4;
-	masks[9]  = tm4 | tm1;
-	masks[10] = tm4 | tm2;
-	masks[11] = tm4 | tm2 | tm1;
-	masks[12] = tm4 | tm3;
-	masks[13] = tm4 | tm3 | tm1;
-	masks[14] = tm4 | tm3 | tm2;
-	masks[15] = tm4 | tm3 | tm2 | tm1;
+		while (mask) {
+			int bit = __builtin_ctz(mask);
+			tmask |= f->tm[bit];
+			mask ^= (1 << bit);
+		}
+		masks[i] = tmask;
+	}
 
-	for (uint32_t mask, i = 1; i < 16; i++) {
+	for (uint32_t mask, i = 1; i < (1 << NUM_SETS); i++) {
 		struct tier *ts = f->sets + i;
 		mask = masks[i];
 
@@ -750,25 +740,12 @@ set_tms(struct frequency *f)
 	if (t->l < 16)
 		return;
 
-//	printf("%c\n", 'a' + __builtin_ctz(f->m));
+//	printf("%c\n", 'a' + zero);
 
-	uint32_t mask = 0;
-	set_tm(t, zero, mask, &f->tm1);
-
-	mask |= f->tm1;
-	set_tm(t, zero, mask, &f->tm2);
-
-	mask |= f->tm2;
-	set_tm(t, zero, mask, &f->tm3);
-
-	mask |= f->tm3;
-	set_tm(t, zero, mask, &f->tm4);
-
-	mask |= f->tm4;
-	set_tm(t, zero, mask, &f->tm5);
-
-	mask |= f->tm5;
-	set_tm(t, zero, mask, &f->tm6);
+	for (uint32_t mask = 0, i = 0; i < (NUM_SETS + 2); i++) {
+		set_tm(t, zero, mask, &f->tm[i]);
+		mask |= f->tm[i];
+	}
 } // set_tms
 
 // This function looks like it's doing a lot, but because of good spatial
@@ -789,19 +766,15 @@ set_tier_offsets(struct frequency *f)
 		asm("nop");
 
 	// Setup defaults.  set_tms() may alter these
-	f->tm1 = frq[25].m;
-	f->tm2 = frq[24].m;
-	f->tm3 = frq[23].m;
-	f->tm4 = frq[22].m;
-	f->tm5 = frq[21].m;
-	f->tm6 = frq[20].m;
+	for (int i = 0; i < (NUM_SETS + 2); i++)
+		f->tm[i] = frq[25-i].m;
 
 	set_tms(f);
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
 
-	mask = f->tm5;
+	mask = f->tm[NUM_SETS];
 
 	// First subset has tm5, and then now
 	ks = kp = t->s;
@@ -820,7 +793,7 @@ set_tier_offsets(struct frequency *f)
 	// the second tm5 subset into that which does not
 	// have tm6 followed by that which does
 
-	mask = f->tm6;
+	mask = f->tm[NUM_SETS + 1];
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
@@ -941,6 +914,11 @@ main(int argc, char *argv[])
 {
 	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
+
+	if (NUM_SETS < 0 || NUM_SETS > 11) {
+		printf("NUM_SETS must be in the range 0..11 inclusive.  Please recompile.\n");
+		exit(1);
+	}
 
 	// Copy in the default file-name
 	strcpy(file, "words_alpha.txt");
