@@ -34,8 +34,7 @@ static struct frequency {
 
 	atomic_int	pos;		// Position within a set
 	int		ready_to_setup;	//
-	int		ready_to_use;	//
-	uint32_t	pad[5];		// Pad to 64 byte boundary
+	uint32_t	pad[6];		// Pad to 64 byte boundary
 
 	struct tier	sets[16];	// Tier Sets (384 bytes)
 } frq[26] __attribute__ ((aligned(64)));
@@ -492,15 +491,14 @@ work_pool(void *arg)
 		set_tier_offsets(frq + set_num);
 	}
 #endif
-	
+
 	// Not gonna lie.  This is ugly.  We're busy-waiting until we get
 	// told to start solving.  It shouldn't be for too long though...
 	// I tried many different methods but this was always the fastest
-	while (!go_solve)
+	while (!go_solve && (setups_done < 26))
 		asm("nop");
 
 	solve_work();
-
 	return NULL;
 } // work_pool
 
@@ -858,9 +856,8 @@ set_tier_offsets(struct frequency *f)
 
 	setup_tkeys(f);
 
-	// Mark as done and ready
+	// Mark as done
 set_tier_offsets_done:
-	f->ready_to_use = 1;
 	atomic_fetch_add(&setups_done, 1);
 } // set_tier_offsets
 
