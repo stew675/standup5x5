@@ -84,7 +84,7 @@ static uint32_t cf[MAX_READERS][32] __attribute__ ((aligned(64))) = {0};
 
 static void solve();
 static void solve_work();
-static void process_tier_offsets();
+static void set_tier_offsets(struct frequency *f);
 
 void
 print_time_taken(char *label, struct timespec *ts, struct timespec *te)
@@ -460,6 +460,7 @@ start_solvers()
 	go_solve = 1;
 } // start_solvers
 
+
 // We create a worker pool like this because on virtual systems, especially
 // on WSL, thread-creation is very expensive, so we only want to do it once
 void *
@@ -481,7 +482,14 @@ work_pool(void *arg)
 		}
 
 #ifndef NO_FREQ_SETUP
-	process_tier_offsets();
+	while (1) {
+		int set_num = atomic_fetch_add(&setup_set, 1);
+
+		if (set_num >= 26)
+			break;
+
+		set_tier_offsets(frq + set_num);
+	}
 #endif
 
 	// Not gonna lie.  This is ugly.  We're busy-waiting until we get
@@ -784,7 +792,7 @@ set_tier_offsets(struct frequency *f)
 	if (f == frq)
 		goto set_tier_offsets_done;
 
-	// Wait here until all data is ready for this set
+	// Wait here until all data is ready
 	while (!f->ready_to_setup)
 		asm("nop");
 
@@ -848,22 +856,10 @@ set_tier_offsets(struct frequency *f)
 
 	setup_tkeys(f);
 
+	// Mark as done
 set_tier_offsets_done:
 	atomic_fetch_add(&setups_done, 1);
 } // set_tier_offsets
-
-static void
-process_tier_offsets()
-{
-	int set_num;
-
-	while (1) {
-		if ((set_num = atomic_fetch_add(&setup_set, 1)) >= 26)
-			return;
-
-		set_tier_offsets(frq + set_num);
-	}
-} // process_tier_offsets
 
 // Specialised frequency sort, since we only need to swap the first 8 bytes
 // of frequency sets at this point in time and each frequency set structure
@@ -924,12 +920,16 @@ setup_frequency_sets()
 		for (uint32_t p = NUM_POISON; p--; )
 			*ts++ = (uint32_t)(~0);
 
-		// Mark set as ready to be processed
+		// Instruct any waiting worker thread to start setup
+		// but we have to do it ourselves if single threaded
 		f->ready_to_setup = 1;
+		if (nthreads == 1)
+			set_tier_offsets(f);
 	}
 
-	// Process tier offsets too after done sorting sets
-	process_tier_offsets();
+	// Wait for all setups to complete
+	while(setups_done < 26)
+		asm("nop");
 } // setup_frequency_sets
 
 #ifndef DONT_INCLUDE_MAIN
