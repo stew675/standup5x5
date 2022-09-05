@@ -31,10 +31,11 @@ static struct frequency {
 	uint32_t	tm4;		// Tiered Mask 4
 	uint32_t	tm5;		// Tiered Mask 5
 	uint32_t	tm6;		// Tiered Mask 6
+	uint32_t	*kp;
 
 	atomic_int	pos;		// Position within a set
 	int		ready_to_setup;	//
-	uint32_t	pad[6];		// Pad to 64 byte boundary
+	uint32_t	pad[4];		// Pad to 64 byte boundary
 
 	struct tier	sets[16];	// Tier Sets (384 bytes)
 } frq[26] __attribute__ ((aligned(64)));
@@ -720,14 +721,13 @@ setup_tkeys(struct frequency *f)
 } // setup_tkeys
 
 static inline void
-set_tm(struct tier *t, uint32_t zero, uint32_t mask, uint32_t *tm)
+set_tm(struct frequency *f, uint32_t zero, uint32_t mask, uint32_t *tm)
 {
 	uint32_t counts[26] = {0};
-	uint32_t *ks = t->s, len = t->l;
+	uint32_t *ks = f->kp, key;
 
 	// Get frequency counts
-	while (len--) {
-		uint32_t key = *ks++;
+	while ((key = *ks++)) {
 		if (key & mask)
 			continue;
 		while (key) {
@@ -752,31 +752,27 @@ set_tm(struct tier *t, uint32_t zero, uint32_t mask, uint32_t *tm)
 static void
 set_tms(struct frequency *f)
 {
-	struct tier *t = f->sets;
 	uint32_t zero = __builtin_ctz(f->m);
-
-	if (t->l < 16)
-		return;
 
 //	printf("%c\n", 'a' + __builtin_ctz(f->m));
 
 	uint32_t mask = 0;
-	set_tm(t, zero, mask, &f->tm1);
+	set_tm(f, zero, mask, &f->tm1);
 
 	mask |= f->tm1;
-	set_tm(t, zero, mask, &f->tm2);
+	set_tm(f, zero, mask, &f->tm2);
 
 	mask |= f->tm2;
-	set_tm(t, zero, mask, &f->tm3);
+	set_tm(f, zero, mask, &f->tm3);
 
 	mask |= f->tm3;
-	set_tm(t, zero, mask, &f->tm4);
+	set_tm(f, zero, mask, &f->tm4);
 
 	mask |= f->tm4;
-	set_tm(t, zero, mask, &f->tm5);
+	set_tm(f, zero, mask, &f->tm5);
 
 	mask |= f->tm5;
-	set_tm(t, zero, mask, &f->tm6);
+	set_tm(f, zero, mask, &f->tm6);
 } // set_tms
 
 // This function looks like it's doing a lot, but because of good spatial
@@ -901,6 +897,7 @@ setup_frequency_sets()
 		struct tier *t = f->sets;
 		uint32_t mask = f->m, *ks = kp, *ts, key;
 
+		f->kp = kp;
 		t->s = (ts = tkeys[i]);
 		while((key = *ks))
 			if (key & mask) {
