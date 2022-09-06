@@ -796,15 +796,16 @@ set_tier_offsets(struct frequency *f)
 	while (!f->ready_to_setup)
 		asm("nop");
 
+	// uaeios
 	// Setup defaults.  set_tms() may alter these
-	f->tm1 = frq[25].m;
-	f->tm2 = frq[24].m;
-	f->tm3 = frq[23].m;
-	f->tm4 = frq[22].m;
-	f->tm5 = frq[21].m;
-	f->tm6 = frq[20].m;
+	f->tm1 = 1 << ('u' - 'a');
+	f->tm2 = 1 << ('a' - 'a');
+	f->tm3 = 1 << ('e' - 'a');
+	f->tm4 = 1 << ('i' - 'a');
+	f->tm5 = 1 << ('o' - 'a');
+	f->tm6 = 1 << ('s' - 'a');
 
-	set_tms(f);
+//	set_tms(f);
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
