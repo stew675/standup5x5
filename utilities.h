@@ -4,9 +4,13 @@
 #define	MAX_WORDS        8192
 #define	MAX_THREADS        64
 
-#define NUM_SETS	    0		// Must be in the range 0..11 inclusive
+#define NUM_SETS	    4		// Must be in the range 0..11 inclusive
+#define MAX_SETS	   10
+#define SAMPLE_DEPTH        3
 
 static const char	*solution_filename = "solutions.txt";
+static const char	*order = NULL;
+static int		set_depth = NUM_SETS;
 
 // Worker thread state
 static struct worker {
@@ -34,7 +38,7 @@ static struct frequency {
 	atomic_int	pos __attribute__ ((aligned(64)));
 
 	// Tier Sets
-	struct tier	sets[1<<(NUM_SETS)] __attribute__ ((aligned(64)));
+	struct tier	sets[1<<(MAX_SETS)] __attribute__ ((aligned(64)));
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -73,12 +77,13 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-static uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
+static uint32_t	tkeys[26][MAX_WORDS * 16] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
 // lines independent to each reader, thereby minimising CPU cache contention
 static uint32_t cf[MAX_READERS][32] __attribute__ ((aligned(64))) = {0};
+static uint32_t sf[32] __attribute__ ((aligned(64))) = {0};
 
 static void solve();
 static void solve_work();
@@ -642,12 +647,12 @@ by_frequency_hi(const void *a, const void *b)
 #define CALCULATE_SET_AND_END						\
 	do {								\
 		int tier_num = 0;					\
-		for (int i = 0; i < NUM_SETS; i++)			\
+		for (int i = 0; i < set_depth; i++)			\
 			tier_num += (!!(mask & f->tm[i]) << i);		\
 		struct tier *t = f->sets + tier_num;			\
 									\
-		int mf = !!(mask & f->tm[NUM_SETS]);			\
-		int ms = !!(mask & f->tm[NUM_SETS + 1]);		\
+		int mf = !!(mask & f->tm[set_depth]);			\
+		int ms = !!(mask & f->tm[set_depth + 1]);		\
 									\
 		end = t->s + (ms * t->toff3) + (!ms * t->l);		\
 		ms &= !mf;						\
@@ -660,9 +665,9 @@ setup_tkeys(struct frequency *f)
 	struct tier	*t0 = f->sets;
 	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
 	uint32_t	*ks, len, key;
-	uint32_t	masks[1 << NUM_SETS];
+	uint32_t	masks[1 << MAX_SETS];
 
-	for (uint32_t i = 0; i < (1 << NUM_SETS); i++) {
+	for (uint32_t i = 0; i < (1 << set_depth); i++) {
 		uint32_t mask = i, tmask = 0;
 
 		while (mask) {
@@ -673,7 +678,7 @@ setup_tkeys(struct frequency *f)
 		masks[i] = tmask;
 	}
 
-	for (uint32_t mask, i = 1; i < (1 << NUM_SETS); i++) {
+	for (uint32_t mask, i = 1; i < (1 << set_depth); i++) {
 		struct tier *ts = f->sets + i;
 		mask = masks[i];
 
@@ -750,7 +755,7 @@ set_tms(struct frequency *f)
 
 //	printf("%c\n", 'a' + zero);
 
-	for (uint32_t mask = 0, i = 0; i < (NUM_SETS + 2); i++) {
+	for (uint32_t mask = 0, i = 0; i < (set_depth + 2); i++) {
 		set_tm(t, zero, mask, &f->tm[i]);
 		mask |= f->tm[i];
 	}
@@ -774,15 +779,15 @@ set_tier_offsets(struct frequency *f)
 		asm("nop");
 
 	// Setup defaults.  set_tms() may alter these
-	for (int i = 0; i < (NUM_SETS + 2); i++)
+	for (int i = 0; i < (set_depth + 2); i++)
 		f->tm[i] = frq[25-i].m;
 
-	set_tms(f);
+//	set_tms(f);
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
 
-	mask = f->tm[NUM_SETS];
+	mask = f->tm[set_depth];
 
 	// First subset has tm5, and then now
 	ks = kp = t->s;
@@ -801,7 +806,7 @@ set_tier_offsets(struct frequency *f)
 	// the second tm5 subset into that which does not
 	// have tm6 followed by that which does
 
-	mask = f->tm[NUM_SETS + 1];
+	mask = f->tm[set_depth + 1];
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
@@ -893,6 +898,8 @@ setup_frequency_sets()
 		for (uint32_t p = NUM_POISON; p--; )
 			*ts++ = (uint32_t)(~0);
 
+		if (i == SAMPLE_DEPTH)
+			sample_frequencies();
 		// Instruct any waiting worker thread to start setup
 		// but we have to do it ourselves if single threaded
 		f->ready_to_setup = 1;
@@ -915,11 +922,6 @@ main(int argc, char *argv[])
 	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
 
-	if (NUM_SETS < 0 || NUM_SETS > 11) {
-		printf("NUM_SETS must be in the range 0..11 inclusive.  Please recompile.\n");
-		exit(1);
-	}
-
 	// Copy in the default file-name
 	strcpy(file, "words_alpha.txt");
 
@@ -937,6 +939,27 @@ main(int argc, char *argv[])
 					strncpy(file, argv[i+1], 255);
 					file[255] = '\0';
 					i++;
+					continue;
+				}
+			}
+
+			if (!strncmp(argv[i], "-o", 2)) {
+				if ((i + 1) < argc) {
+					order = argv[i+1];
+					i++;
+					continue;
+				}
+			}
+
+			if (!strncmp(argv[i], "-d", 2)) {
+				if ((i + 1) < argc) {
+					set_depth = atoi(argv[i+1]);
+					i++;
+					if (set_depth < 2)
+						set_depth = 2;
+					if (set_depth > (MAX_SETS + 2))
+						set_depth = (MAX_SETS + 2);
+					set_depth -= 2;
 					continue;
 				}
 			}
