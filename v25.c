@@ -51,6 +51,8 @@ vscan(uint32_t mask, uint32_t *set)
 	return (uint32_t)_mm256_movemask_epi8(vres);
 } // vscan
 
+__thread uint32_t compares = 0;
+
 // find_solutions() which is the busiest loop is kept
 // as small and tight as possible for the most speed
 void
@@ -69,6 +71,7 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 
 		CALCULATE_SET_AND_END;
 
+		compares += (end - set);
 		for (; set < end; set += 8) {
 			uint32_t vresmask = vscan(mask, set);
 			while (vresmask) {
@@ -103,6 +106,7 @@ solve_work()
 	while ((pos = atomic_fetch_add(&f->pos, 1)) < t->l)
 		find_solutions(1, f + 1, 0, 1, solution, t->s[pos]);
 
+	atomic_fetch_add(&total_compares, compares);
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
 
