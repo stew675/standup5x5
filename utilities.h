@@ -52,6 +52,7 @@ atomic_int	setup_set	__attribute__ ((aligned(64))) = 0;
 atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
+atomic_int	total_compares	__attribute__ ((aligned(64))) = 0;
 
 // Put volatile thread sync variables on their own CPU cache line
 volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
@@ -1170,11 +1171,14 @@ main(int argc, char *argv[])
 	}
 	printf("\n\n");
 
+	printf("Total Compares    = %8d\n\n", total_compares);
 	printf("Most Frequent Order = %s\n", mforder);
 	printf("Letter Search Order = ");
 	for (int i = 0; i < 26; i++)
 		printf("%c", 'a' + __builtin_ctz(frq[i].m));
-	printf("\n");
+	printf("\n\n");
+	printf("MF Depth          = %8d\n", set_depth + 2);
+	printf("Sample Depth      = %8d\n", sample_depth);
 
 	printf("Num Unique Words  = %8d\n", nkeys);
 	printf("Hash Collisions   = %8u\n", hash_collisions);

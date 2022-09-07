@@ -40,7 +40,7 @@ add_solution(uint32_t *solution)
 	}
 } // add_solution
 
-uint32_t loops = 0;
+__thread uint32_t compares = 0;
 
 // Since find_solutions() is the busiest function we keep the loops
 // within it as small and tight as possible for the most speed
@@ -60,7 +60,7 @@ find_solutions(int depth, struct frequency *f, uint32_t *solution,
 
 		CALCULATE_SET_AND_END;
 
-		loops += (end - set);
+		compares += (end - set);
 		while (set < end)
 			if (!((key = *set++) & mask))
 				find_solutions(depth + 1, f + 1, solution, mask, key, skipped);
@@ -91,6 +91,7 @@ solve_work()
 	while ((pos = atomic_fetch_add(&f->pos, 1)) < t->l)
 		find_solutions(1, f + 1, solution, 0, t->s[pos], 1);
 
+	atomic_fetch_add(&total_compares, compares);
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
 
@@ -106,5 +107,4 @@ solve()
 	// Wait for any other threads to finish up
 	while(solvers_done < nthreads)
 		usleep(1);
-	printf("Loops = %u\n", loops);
 } // solve
