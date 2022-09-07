@@ -6,11 +6,14 @@
 
 #define NUM_SETS	    4		// Must be in the range 0..11 inclusive
 #define MAX_SETS	   10
-#define SAMPLE_DEPTH        3
+#define SAMPLE_DEPTH        2
 
 static const char	*solution_filename = "solutions.txt";
-static const char	*order = NULL;
-static int		set_depth = NUM_SETS;
+static const char	*sorder = NULL;			// Frequency Order Override
+static const char	*mfset = NULL;			// Most Frequent Set Override
+static int		set_depth = NUM_SETS;		// Number of additional tier masks
+static int		sample_depth = SAMPLE_DEPTH;	// 0 means uses frequencies from input file
+char			mforder[27] = {0};
 
 // Worker thread state
 static struct worker {
@@ -714,6 +717,7 @@ setup_tkeys(struct frequency *f)
 	}
 } // setup_tkeys
 
+#if 0
 static inline void
 set_tm(struct tier *t, uint32_t zero, uint32_t mask, uint32_t *tm)
 {
@@ -760,6 +764,7 @@ set_tms(struct frequency *f)
 		mask |= f->tm[i];
 	}
 } // set_tms
+#endif
 
 // This function looks like it's doing a lot, but because of good spatial
 // and temportal localities each call typically takes ~1us on words_alpha
@@ -778,11 +783,9 @@ set_tier_offsets(struct frequency *f)
 	while (!f->ready_to_setup)
 		asm("nop");
 
-	// Setup defaults.  set_tms() may alter these
+	// Apply the mf order
 	for (int i = 0; i < (set_depth + 2); i++)
-		f->tm[i] = frq[25-i].m;
-
-//	set_tms(f);
+		f->tm[i] = 1 << (mforder[i] - 'a');
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
@@ -839,14 +842,137 @@ set_tier_offsets_done:
 	atomic_fetch_add(&setups_done, 1);
 } // set_tier_offsets
 
+int
+apply_user_mfset_override()
+{
+	int olen = 0;
+
+	if (mfset && ((olen = strlen(mfset)) > 26))
+		olen = 26;
+
+	// Apply user override mf ordering
+	for (int i = 0; i < olen; i++) {
+		int c = mfset[i] - 'a';
+
+		mforder[i] = c + 'a';
+		sf[c] = 0;
+	}
+
+	return olen;
+} // apply_user_mfset_override
+
+void
+get_frequencies(uint32_t *end)
+{
+	// Calculate frequencies from the sample size if needed
+	if (sample_depth > 0) {
+		uint32_t key, *set = keys;
+
+		while (set < end) {
+			key = *set++;
+			while (key) {
+				int i = __builtin_ctz(key);
+				sf[i]++;
+				key ^= (1 << i);
+			}
+		}
+
+		for (int i = 0; i < sample_depth; i++) {
+			struct frequency *f = frq + i;
+			int c = __builtin_ctz(f->m);
+			sf[c] = 0;
+		}
+	}
+
+	// Apply any user mfset override
+	int olen = apply_user_mfset_override();
+
+	// Now set the remaining unset mforder from the sample frequencies
+	for (int i = olen; i < 26; i++) {
+		int imax = i, fmax = 0;
+
+		for (int j = 0; j < 26; j++)
+			if (sf[j] > fmax)
+				fmax = sf[(imax = j)];
+
+		if (fmax == 0) {
+			mforder[i] = '\0';
+			break;
+		}
+
+		mforder[i] = 'a' + imax;
+		sf[imax] = 0;
+	}
+} // get_frequencies
+
+void
+process_set(int depth, uint32_t *end)
+{
+	struct frequency *f = frq + depth;
+
+	if ((depth == 0 && sample_depth == 0) ||
+	    (++depth == sample_depth))
+		get_frequencies(end);
+
+	if (depth < sample_depth)
+		return;
+
+	// Kick start everything that was waiting
+	if (depth == sample_depth)
+		for (int i = 0; i < sample_depth; i++) {
+			frq[i].ready_to_setup = 1;
+			if (nthreads == 1)
+				set_tier_offsets(frq + i);
+		}
+
+	// Instruct any waiting worker thread to start setup
+	// but we have to do it ourselves if single threaded
+	f->ready_to_setup = 1;
+	if (nthreads == 1)
+		set_tier_offsets(f);
+} // process_set
+
 // Specialised frequency sort, since we only need to swap the first 8 bytes
 // of frequency sets at this point in time and each frequency set structure
 // can be many hundreds of bytes, which wastes time if qsort is used
 void
 fsort()
 {
-	for (int i = 1; i < 26; i++)
-		for (int j = i; j; j--) {
+	int olen = 0;
+
+	// If sample depth is 0, copy file frequencies to
+	// sample frequencies before doing anything else
+	if (sample_depth == 0)
+		for (int i = 0; i < 26; i++)
+			sf[i] = frq[i].f;
+
+	// Now apply any user-override ordering
+	if (sorder) {
+		olen = strlen(sorder);
+		if (olen > 26)
+			olen = 26;
+	}
+
+	for (int i = 0; i < olen; i++) {
+		uint32_t m = 1 << (sorder[i] - 'a');
+
+		// Now find the matching set and swap
+		if (frq[i].m == m)
+			continue;
+
+		for (int j = i + 1; i < 26; j++) {
+			if (frq[j].m != m)
+				continue;
+			uint64_t tmp = *(uint64_t *)(frq + j);
+			*(uint64_t *)(frq + j) = *(uint64_t *)(frq + i);
+			*(uint64_t *)(frq + i) = tmp;
+			break;
+		}
+	}
+
+	// Now sort the remainder
+	for (int i = olen + 1; i < 26; i++) {
+		for (int j = i; j > olen; j--) {
 			if (frq[j].f == 0)
 				break;
 			if (frq[j - 1].f && (frq[j].f > frq[j - 1].f))
@@ -856,6 +982,7 @@ fsort()
 			*(uint64_t *)(frq + j) = *(uint64_t *)(frq + (j - 1));
 			*(uint64_t *)(frq + (j - 1)) = tmp;
 		}
+	}
 } // fsort
 
 // The role of this function is to re-arrange the key set according to all
@@ -898,13 +1025,7 @@ setup_frequency_sets()
 		for (uint32_t p = NUM_POISON; p--; )
 			*ts++ = (uint32_t)(~0);
 
-		if (i == SAMPLE_DEPTH)
-			sample_frequencies();
-		// Instruct any waiting worker thread to start setup
-		// but we have to do it ourselves if single threaded
-		f->ready_to_setup = 1;
-		if (nthreads == 1)
-			set_tier_offsets(f);
+		process_set(i, kp);
 	}
 
 	// Wait for all setups to complete
@@ -943,9 +1064,29 @@ main(int argc, char *argv[])
 				}
 			}
 
+			if (!strncmp(argv[i], "-m", 2)) {
+				if ((i + 1) < argc) {
+					mfset = argv[i+1];
+					for (const char *c = mfset; *c; c++) {
+						if (*c >= 'a' || *c <= 'z')
+							continue;
+						printf("Most significant set must only be lower case characters\n");
+						exit(1);
+					}
+					i++;
+					continue;
+				}
+			}
+
 			if (!strncmp(argv[i], "-o", 2)) {
 				if ((i + 1) < argc) {
-					order = argv[i+1];
+					sorder = argv[i+1];
+					for (const char *c = sorder; *c; c++) {
+						if (*c >= 'a' || *c <= 'z')
+							continue;
+						printf("Search order set must only be lower case characters\n");
+						exit(1);
+					}
 					i++;
 					continue;
 				}
@@ -955,11 +1096,24 @@ main(int argc, char *argv[])
 				if ((i + 1) < argc) {
 					set_depth = atoi(argv[i+1]);
 					i++;
-					if (set_depth < 2)
-						set_depth = 2;
-					if (set_depth > (MAX_SETS + 2))
-						set_depth = (MAX_SETS + 2);
+					if (set_depth < 2 || set_depth > (MAX_SETS + 2)) {
+						printf("Most significant search depth must be from 2 to %d inclusive\n",
+								MAX_SETS + 2);
+						exit(1);
+					}
 					set_depth -= 2;
+					continue;
+				}
+			}
+
+			if (!strncmp(argv[i], "-s", 2)) {
+				if ((i + 1) < argc) {
+					sample_depth = atoi(argv[i+1]);
+					i++;
+					if (sample_depth < 0 || sample_depth > 26) {
+						printf("Frequency sample depth must be from 1 to 26\n");
+						exit(1);
+					}
 					continue;
 				}
 			}
@@ -1015,6 +1169,12 @@ main(int argc, char *argv[])
 			c, t->l, t->toff1, t->toff2, t->toff3);
 	}
 	printf("\n\n");
+
+	printf("Most Frequent Order = %s\n", mforder);
+	printf("Letter Search Order = ");
+	for (int i = 0; i < 26; i++)
+		printf("%c", 'a' + __builtin_ctz(frq[i].m));
+	printf("\n");
 
 	printf("Num Unique Words  = %8d\n", nkeys);
 	printf("Hash Collisions   = %8u\n", hash_collisions);
