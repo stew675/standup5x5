@@ -4,9 +4,9 @@
 #define	MAX_WORDS        8192
 #define	MAX_THREADS        64
 
-#define NUM_SETS	    4		// Must be in the range 0..11 inclusive
-#define MAX_SETS	   10
 #define SAMPLE_DEPTH        3
+#define MAX_SETS	   17		// More than 17 will likely cause allocation failures
+#define NUM_SETS	    6		// Must be in the range 2..MAX_SETS inclusive
 
 static const char	*solution_filename = "solutions.txt";
 static const char	*sorder = NULL;			// Frequency Order Override
@@ -28,20 +28,18 @@ struct tier {
 	uint32_t	toff1;	// Tiered Offset 1
 	uint32_t	toff2;	// Tiered Offset 2
 	uint32_t	toff3;	// Tiered Offset 3
-};
+} tiers[26][1 << MAX_SETS] __attribute__ ((aligned(64)));
 
 // Character frequency recording
 static struct frequency {
 	uint32_t	m;			// Mask (1 << (c - 'a'))
 	int32_t		f;			// Frequency
 	int		ready_to_setup;		// Worker thread notification
-	uint32_t	tm[13];			// Ends on 64-byte boundary
+	uint32_t	tm[MAX_SETS];		// Tier Masks
+	struct tier	*sets;			// Tier Sets
 
 	// Position within a set
 	atomic_int	pos __attribute__ ((aligned(64)));
-
-	// Tier Sets
-	struct tier	sets[1<<(MAX_SETS)] __attribute__ ((aligned(64)));
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -81,7 +79,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-static uint32_t	tkeys[26][MAX_WORDS * 16] __attribute__ ((aligned(64)));
+static uint32_t	*tkeys[32] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
@@ -110,8 +108,17 @@ frq_init()
 {
 	memset(frq, 0, sizeof(frq));
 
-	for (int b = 0; b < 26; b++)
+	for (int b = 0; b < 26; b++) {
 		frq[b].m = (1UL << b);	// The bit mask
+		frq[b].sets = tiers[b];
+
+		void *mem = aligned_alloc(64, MAX_WORDS * (1 << set_depth));
+		if (mem == NULL) {
+			perror("aligned_alloc");
+			exit(1);
+		}
+		tkeys[b] = (uint32_t *)mem;
+	}
 } // frq_init
 
 static void
@@ -656,7 +663,7 @@ by_frequency_hi(const void *a, const void *b)
 		struct tier *t = f->sets + tier_num;			\
 									\
 		int mf = !!(mask & f->tm[set_depth]);			\
-		int ms = !!(mask & f->tm[set_depth + 1]);		\
+		int ms = !!(mask & f->tm[set_depth+1]);			\
 									\
 		end = t->s + (ms * t->toff3) + (!ms * t->l);		\
 		ms &= !mf;						\
@@ -671,7 +678,7 @@ setup_tkeys(struct frequency *f)
 	uint32_t	*ks, len, key;
 	uint32_t	masks[1 << MAX_SETS];
 
-	for (uint32_t i = 0; i < (1 << set_depth); i++) {
+	for (uint32_t i = 0; i < (1 << (set_depth - 2)); i++) {
 		uint32_t mask = i, tmask = 0;
 
 		while (mask) {
@@ -682,7 +689,7 @@ setup_tkeys(struct frequency *f)
 		masks[i] = tmask;
 	}
 
-	for (uint32_t mask, i = 1; i < (1 << set_depth); i++) {
+	for (uint32_t mask, i = 1; i < (1 << (set_depth - 2)); i++) {
 		struct tier *ts = f->sets + i;
 		mask = masks[i];
 
@@ -772,10 +779,6 @@ set_tms(struct frequency *f)
 static void
 set_tier_offsets(struct frequency *f)
 {
-	struct tier *t = f->sets;
-	uint32_t key, mask, len;
-	uint32_t *ks, *kp;
-
 	// Skip first set.  Nothing uses its subsets
 	if (f == frq)
 		goto set_tier_offsets_done;
@@ -785,19 +788,22 @@ set_tier_offsets(struct frequency *f)
 		asm("nop");
 
 	// Apply the mf order
-	for (int i = 0; i < (set_depth + 2); i++)
+	for (int i = 0; i < set_depth; i++)
 		f->tm[i] = 1 << (mforder[i] - 'a');
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
 
-	mask = f->tm[set_depth];
+	uint32_t mask = f->tm[set_depth - 2];
 
 	// First subset has tm5, and then now
-	ks = kp = t->s;
-	len = t->l;
+	struct tier *t = f->sets;
+	uint32_t *kp = t->s;
+	uint32_t *ks = kp;
+	uint32_t len = t->l;
+
 	for (; len--; ks++) {
-		key = *ks;
+		uint32_t key = *ks;
 		if (key & mask) {
 			*ks = *kp;
 			*kp++ = key;
@@ -810,13 +816,13 @@ set_tier_offsets(struct frequency *f)
 	// the second tm5 subset into that which does not
 	// have tm6 followed by that which does
 
-	mask = f->tm[set_depth + 1];
+	mask = f->tm[set_depth - 1];
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
 	len = t->toff2;
 	for (; len--; ks++) {
-		key = *ks;
+		uint32_t key = *ks;
 		if (key & mask) {
 			*ks = *kp;
 			*kp++ = key;
@@ -828,7 +834,7 @@ set_tier_offsets(struct frequency *f)
 	ks = kp = t->s + t->toff2;
 	len = t->l - t->toff2;
 	for (; len--; ks++) {
-		key = *ks;
+		uint32_t key = *ks;
 		if (!(key & mask)) {
 			*ks = *kp;
 			*kp++ = key;
@@ -1032,7 +1038,11 @@ setup_frequency_sets()
 	// Wait for all setups to complete
 	while(setups_done < 26)
 		asm("nop");
+
+	// Drop set_depth by 2 for the main algorithm
+	set_depth -= 2;
 } // setup_frequency_sets
+
 
 #ifndef DONT_INCLUDE_MAIN
 
@@ -1097,12 +1107,11 @@ main(int argc, char *argv[])
 				if ((i + 1) < argc) {
 					set_depth = atoi(argv[i+1]);
 					i++;
-					if (set_depth < 2 || set_depth > (MAX_SETS + 2)) {
+					if (set_depth < 2 || set_depth > MAX_SETS) {
 						printf("Most significant search depth must be from 2 to %d inclusive\n",
-								MAX_SETS + 2);
+								MAX_SETS);
 						exit(1);
 					}
-					set_depth -= 2;
 					continue;
 				}
 			}
@@ -1177,6 +1186,7 @@ main(int argc, char *argv[])
 	for (int i = 0; i < 26; i++)
 		printf("%c", 'a' + __builtin_ctz(frq[i].m));
 	printf("\n\n");
+	// set_depth was dropped by 2 before the main algorithm started
 	printf("MF Depth          = %8d\n", set_depth + 2);
 	printf("Sample Depth      = %8d\n", sample_depth);
 
