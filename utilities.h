@@ -6,7 +6,7 @@
 
 #define NUM_SETS	    4		// Must be in the range 0..11 inclusive
 #define MAX_SETS	   10
-#define SAMPLE_DEPTH        2
+#define SAMPLE_DEPTH        3
 
 static const char	*solution_filename = "solutions.txt";
 static const char	*sorder = NULL;			// Frequency Order Override
