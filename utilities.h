@@ -5,7 +5,7 @@
 #define	MAX_THREADS        64
 
 #define SAMPLE_DEPTH        3
-#define MAX_SETS	   17		// More than 17 will likely cause allocation failures
+#define MAX_SETS	   20		// More than 17 will likely cause allocation failures
 #define NUM_SETS	    6		// Must be in the range 2..MAX_SETS inclusive
 
 static const char	*solution_filename = "solutions.txt";
@@ -106,13 +106,17 @@ print_time_taken(char *label, struct timespec *ts, struct timespec *te)
 static void
 frq_init()
 {
+	size_t one = 1;
+	size_t tkeysz = MAX_WORDS * (one << set_depth);
+
 	memset(frq, 0, sizeof(frq));
 
+	printf("tkeysz = %lu\n", tkeysz / 32);
 	for (int b = 0; b < 26; b++) {
 		frq[b].m = (1UL << b);	// The bit mask
 		frq[b].sets = tiers[b];
 
-		void *mem = aligned_alloc(64, MAX_WORDS * (1 << set_depth));
+		void *mem = aligned_alloc(64, tkeysz);
 		if (mem == NULL) {
 			perror("aligned_alloc");
 			exit(1);
@@ -1175,8 +1179,15 @@ main(int argc, char *argv[])
 	for (int i = 0; i < 26; i++) {
 		struct tier *t = frq[i].sets;
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
-			c, t->l, t->toff1, t->toff2, t->toff3);
+		uint32_t toff1 = 0, toff2 = 0, toff3 = 0, len = 0;
+		for (int i = 0; i < (1 << set_depth); i++) {
+			toff1 += t[i].toff1;
+			toff2 += t[i].toff2;
+			toff3 += t[i].toff3;
+			len += t[i].l;
+		}
+		printf("%c toff1=%5d, toff2=%5d, toff3=%5d, len = %5d\n",
+			c, toff1, toff2, toff3, len);
 	}
 	printf("\n\n");
 
