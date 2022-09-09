@@ -4,7 +4,7 @@
 #define	MAX_WORDS        8192
 #define	MAX_THREADS        64
 
-#define NUM_SETS	    3		// Must be in the range 0..11 inclusive
+#define NUM_SETS	    6		// Must be in the range 0..11 inclusive
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -34,7 +34,7 @@ static struct frequency {
 	atomic_int	pos __attribute__ ((aligned(64)));
 
 	// Tier Sets
-	struct tier	sets[1<<(NUM_SETS)] __attribute__ ((aligned(64)));
+	struct tier	sets[1<<(NUM_SETS - 2)] __attribute__ ((aligned(64)));
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -77,7 +77,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-static uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
+static uint32_t	tkeys[26][((MAX_WORDS + 1024) >> 4) * (1 << NUM_SETS)] __attribute__ ((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
@@ -646,12 +646,12 @@ by_frequency_hi(const void *a, const void *b)
 #define CALCULATE_SET_AND_END						\
 	do {								\
 		int tier_num = 0;					\
-		for (int i = 0; i < NUM_SETS; i++)			\
+		for (int i = 0; i < NUM_SETS - 2; i++)			\
 			tier_num += (!!(mask & f->tm[i]) << i);		\
 		struct tier *t = f->sets + tier_num;			\
 									\
-		int mf = !!(mask & f->tm[NUM_SETS]);			\
-		int ms = !!(mask & f->tm[NUM_SETS + 1]);		\
+		int mf = !!(mask & f->tm[NUM_SETS - 2]);		\
+		int ms = !!(mask & f->tm[NUM_SETS - 1]);		\
 									\
 		end = t->s + (ms * t->toff3) + (!ms * t->l);		\
 		ms &= !mf;						\
@@ -664,9 +664,9 @@ setup_tkeys(struct frequency *f)
 	struct tier	*t0 = f->sets;
 	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
 	uint32_t	*ks, len, key;
-	uint32_t	masks[1 << NUM_SETS];
+	uint32_t	masks[1 << (NUM_SETS - 2)];
 
-	for (uint32_t i = 0; i < (1 << NUM_SETS); i++) {
+	for (uint32_t i = 0; i < (1 << (NUM_SETS - 2)); i++) {
 		uint32_t mask = i, tmask = 0;
 
 		while (mask) {
@@ -677,7 +677,7 @@ setup_tkeys(struct frequency *f)
 		masks[i] = tmask;
 	}
 
-	for (uint32_t mask, i = 1; i < (1 << NUM_SETS); i++) {
+	for (uint32_t mask, i = 1; i < (1 << (NUM_SETS - 2)); i++) {
 		struct tier *ts = f->sets + i;
 		mask = masks[i];
 
@@ -743,7 +743,7 @@ set_tms(struct frequency *f)
 		uint32_t key = *ks++;
 		while (key) {
 			int i = __builtin_ctz(key);
-			myprobs[i] += 1;
+			myprobs[i]++;
 			key ^= (1 << i);
 		}
 	}
@@ -760,23 +760,22 @@ set_tms(struct frequency *f)
 		double p = (myprobs[i] /= len);
 		double ph = probs[i];
 
-		myprobs[i] *= ph;
+//		myprobs[i] *= ph;
+		myprobs[i] = ph;
 
 		// Include probability of even reaching this letter itself
 		p *= myp;
 		probs[i] = 1.0 - ((1.0 - p) * (1.0 - ph));
-
-//		printf("   %c %7.5f\n", 'a' + i, myprobs[i]);
 	}
 
 	myprobs[zero] = 0;
-//	probs[zero] = 0;
+	probs[zero] = 0;
 
 	// Let the next worker proceed
 	atomic_fetch_add(&probs_ready, 1);
 
 	// Now actually set our tms
-	for (uint32_t i = 0; i < (NUM_SETS + 2); i++)
+	for (uint32_t i = 0; i < NUM_SETS; i++)
 		set_tm(myprobs, &f->tm[i]);
 } // set_tms
 
@@ -794,10 +793,19 @@ set_tier_offsets(struct frequency *f)
 		asm("nop");
 
 	// Setup defaults.  set_tms() may alter these
-	for (int i = 0; i < (NUM_SETS + 2); i++)
+	for (int i = 0; i < NUM_SETS; i++)
 		f->tm[i] = frq[25-i].m;
 
 	set_tms(f);
+
+	if ((f - frq) < 6) {
+		f->tm[0] = 1 << ('a' - 'a');
+		f->tm[1] = 1 << ('e' - 'a');
+		f->tm[2] = 1 << ('i' - 'a');
+		f->tm[3] = 1 << ('o' - 'a');
+		f->tm[4] = 1 << ('u' - 'a');
+		f->tm[5] = 1 << ('s' - 'a');
+	}
 
 	// Skip first set.  Nothing uses its subsets
 	if (f == frq)
@@ -806,7 +814,7 @@ set_tier_offsets(struct frequency *f)
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
 
-	mask = f->tm[NUM_SETS];
+	mask = f->tm[NUM_SETS - 2];
 
 	// First subset has tm5, and then now
 	ks = kp = t->s;
@@ -825,7 +833,7 @@ set_tier_offsets(struct frequency *f)
 	// the second tm5 subset into that which does not
 	// have tm6 followed by that which does
 
-	mask = f->tm[NUM_SETS + 1];
+	mask = f->tm[NUM_SETS - 1];
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
@@ -939,7 +947,7 @@ main(int argc, char *argv[])
 	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
 
-	if (NUM_SETS < 0 || NUM_SETS > 11) {
+	if (NUM_SETS < 2 || NUM_SETS > 13) {
 		printf("NUM_SETS must be in the range 0..11 inclusive.  Please recompile.\n");
 		exit(1);
 	}
