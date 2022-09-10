@@ -48,7 +48,7 @@ vscan(uint32_t mask, uint32_t *set)
 	__m256i vmask = _mm256_set1_epi32(mask);
 	__m256i vkeys = _mm256_loadu_si256((__m256i *)set);
 	__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), _mm256_setzero_si256());
-	return (uint32_t)_mm256_movemask_epi8(vres);
+	return (uint32_t)(_mm256_movemask_epi8(vres) & 0x11111111UL);
 } // vscan
 
 // find_solutions() which is the busiest loop is kept
@@ -69,14 +69,24 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 
 		CALCULATE_SET_AND_END;
 
-		for (; set < end; set += 8) {
+		uint32_t ks[1024], *kp = ks;
+
+		while (set < end) {
 			uint32_t vresmask = vscan(mask, set);
-			while (vresmask) {
-				int i = __builtin_ctz(vresmask);
-				find_solutions(depth + 1, f + 1, mask, skipped, solution, set[i>>2]);
-				vresmask ^= (0xFU << i);
-			}
+
+			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
+			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
+			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
+			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
+			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
+			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
+			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
+			*kp = *set++; kp += vresmask & 1;
 		}
+
+		for (*kp = 0, kp = ks; (key = *kp++); )
+			find_solutions(depth + 1, f + 1, mask, skipped, solution, key);
+
 		if (skipped)
 			break;
 		skipped = 1;

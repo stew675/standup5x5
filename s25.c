@@ -58,9 +58,13 @@ find_solutions(int depth, struct frequency *f, uint32_t *solution,
 
 		CALCULATE_SET_AND_END;
 
+		uint32_t ks[1024], *kp = ks;
+
 		while (set < end)
-			if (!((key = *set++) & mask))
-				find_solutions(depth + 1, f + 1, solution, mask, key, skipped);
+			kp += !((*kp = *set++) & mask);
+
+		for (*kp = 0, kp = ks; (key = *kp++); )
+			find_solutions(depth + 1, f + 1, solution, mask, key, skipped);
 
 		if (skipped)
 			return;
