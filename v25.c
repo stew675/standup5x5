@@ -47,40 +47,25 @@ add_solution(uint32_t *solution)
 static inline uint32_t *
 vscan(uint32_t mask, uint32_t **set, uint32_t *to)
 {
-	uint32_t *s = *set, one = 1;
+	// the identity shuffle for vpermps, packed to one index per byte
 
 	// Find all valid keys
 	__m256i vmask = _mm256_set1_epi32(mask);
 	__m256i vkeys = _mm256_loadu_si256((__m256i *)*set);
 	__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), vzero);
-	mask = _mm256_movemask_epi8(vres);
-
-	// Pack the results
-	// XXX Is there a better way to do this?
-	*to = *s++; to += (mask & one); mask >>= 4;
-	*to = *s++; to += (mask & one); mask >>= 4;
-	*to = *s++; to += (mask & one); mask >>= 4;
-	*to = *s++; to += (mask & one); mask >>= 4;
-	*to = *s++; to += (mask & one); mask >>= 4;
-	*to = *s++; to += (mask & one); mask >>= 4;
-	*to = *s++; to += (mask & one); mask >>= 4;
-	*to = *s++; to += (mask & one);
-	*set = s;
-
-#if 0
-	// The below code ran slow on AMD CPU.  Note sure why
-
-	// Blend results into destination.  Store everything valid to destination, or store a zero
-	_mm256_storeu_si256((__m256i *)to, _mm256_blendv_epi8(vzero, vkeys, vres));
 	*set += 8;
 
-	// Pack the results (remove the zeros)
-	// XXX Is there a better way to do this?
-	for (uint32_t *ts = to, i = 8; i--; )
-		to += !!(*to = *ts++);
-#endif
+//	mask = _mm256_movemask_epi8(vres);
 
-	return to;
+	mask = _mm256_movemask_ps((__m256)vres);
+	uint64_t expanded_mask = _pdep_u64(mask, 0x0101010101010101) * 0xFF;  // unpack each bit to a byte
+	static const uint64_t identity_indices = 0x0706050403020100;
+	uint64_t wanted_indices = _pext_u64(identity_indices, expanded_mask);
+	__m128i bytevec = _mm_cvtsi64_si128(wanted_indices);
+	__m256i shufmask = _mm256_cvtepu8_epi32(bytevec);
+	_mm256_storeu_si256((__m256i *)to, _mm256_permutevar8x32_ps(vkeys, shufmask));
+
+	return to + __builtin_popcount(mask);
 } // vscan
 
 // find_solutions() which is the busiest loop is kept
