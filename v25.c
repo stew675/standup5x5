@@ -42,30 +42,19 @@ add_solution(uint32_t *solution)
 	}
 } // add_solution
 
-#define vzero _mm256_setzero_si256()
 
-static inline uint32_t *
-vscan(uint32_t mask, uint32_t **set, uint32_t *to)
+static inline uint32_t
+vscan(uint32_t mask, uint32_t *set, uint32_t *n)
 {
-	// the identity shuffle for vpermps, packed to one index per byte
+#define vzero _mm256_setzero_si256()
 
 	// Find all valid keys
 	__m256i vmask = _mm256_set1_epi32(mask);
-	__m256i vkeys = _mm256_loadu_si256((__m256i *)*set);
+	__m256i vkeys = _mm256_loadu_si256((__m256i *)set);
 	__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), vzero);
-	*set += 8;
-
-//	mask = _mm256_movemask_epi8(vres);
-
-	mask = _mm256_movemask_ps((__m256)vres);
-	uint64_t expanded_mask = _pdep_u64(mask, 0x0101010101010101) * 0xFF;  // unpack each bit to a byte
-	static const uint64_t identity_indices = 0x0706050403020100;
-	uint64_t wanted_indices = _pext_u64(identity_indices, expanded_mask);
-	__m128i bytevec = _mm_cvtsi64_si128(wanted_indices);
-	__m256i shufmask = _mm256_cvtepu8_epi32(bytevec);
-	_mm256_storeu_si256((__m256i *)to, _mm256_permutevar8x32_ps(vkeys, shufmask));
-
-	return to + __builtin_popcount(mask);
+	mask = _mm256_movemask_epi8(vres);
+	*n = __builtin_popcount(mask) >> 2;
+	return (uint32_t)_pext_u32(0x76543210, mask);
 } // vscan
 
 // find_solutions() which is the busiest loop is kept
@@ -86,15 +75,12 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 
 		CALCULATE_SET_AND_END;
 
-		uint32_t ks[1024], *kp = ks;
-
 		// Find all matching keys
-		while (set < end)
-			kp = vscan(mask, &set, kp);
-
-		// Now make the recursion calls using the packed results
-		for (*kp = 0, kp = ks; (key = *kp++); )
-			find_solutions(depth + 1, f + 1, mask, skipped, solution, key);
+		while (set < end) {
+			for (uint32_t n, vresmask = vscan(mask, set, &n); n--; vresmask >>= 4)
+				find_solutions(depth + 1, f + 1, mask, skipped, solution, set[vresmask & 0xF]);
+			set += 8;
+		}
 
 		if (skipped)
 			break;
