@@ -42,13 +42,26 @@ add_solution(uint32_t *solution)
 	}
 } // add_solution
 
-static inline uint32_t
-vscan(uint32_t mask, uint32_t *set)
+#define vzero _mm256_setzero_si256()
+
+static inline uint32_t *
+vscan(uint32_t mask, uint32_t **set, uint32_t *to)
 {
+	// Find all valid keys
 	__m256i vmask = _mm256_set1_epi32(mask);
-	__m256i vkeys = _mm256_loadu_si256((__m256i *)set);
-	__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), _mm256_setzero_si256());
-	return (uint32_t)(_mm256_movemask_epi8(vres) & 0x11111111UL);
+	__m256i vkeys = _mm256_loadu_si256((__m256i *)*set);
+	__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), vzero);
+
+	// Blend results into destination.  Store everything valid to destination, or store a zero
+	_mm256_storeu_si256((__m256i *)to, _mm256_blendv_epi8(vzero, vkeys, vres));
+	*set += 8;
+
+	// Pack the results (remove the zeros)
+	// XXX Is there a better way to do this?
+	for (uint32_t *ts = to, i = 8; i--; )
+		to += !!(*to = *ts++);
+
+	return to;
 } // vscan
 
 // find_solutions() which is the busiest loop is kept
@@ -71,19 +84,11 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 
 		uint32_t ks[1024], *kp = ks;
 
-		while (set < end) {
-			uint32_t vresmask = vscan(mask, set);
+		// Find all matching keys
+		while (set < end)
+			kp = vscan(mask, &set, kp);
 
-			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
-			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
-			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
-			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
-			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
-			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
-			*kp = *set++; kp += vresmask & 1; vresmask >>= 4;
-			*kp = *set++; kp += vresmask & 1;
-		}
-
+		// Now make the recursion calls using the packed results
 		for (*kp = 0, kp = ks; (key = *kp++); )
 			find_solutions(depth + 1, f + 1, mask, skipped, solution, key);
 
