@@ -376,38 +376,10 @@ find_words(char *s, char *e, uint32_t rn)
 	}
 } // find_words
 
-// The purpose of this function is to prime the CPU L3 cache
-// and get any page-faults out of the way quickly while the
-// rest of the reader threads do their thing
-uint64_t
-pull_file(struct worker *work)
-{
-	char *s = work->start + (num_readers - 1) * READ_CHUNK;
-	char *e = work->end - 64;
-	uint64_t total = 0;
-
-	// Pull whole cache lines at a time
-	while (s < e) {
-		total += *s;
-		s += 64;
-	}
-	return total;
-} // pull_file
-
 void
 file_reader(struct worker *work)
 {
 	uint32_t rn = work - workers;
-
-	size_t len = 0;
-	if (rn == 1) {
-		struct timespec t1[1], t2[1];
-
-		clock_gettime(CLOCK_MONOTONIC, t1);
-		len = pull_file(work);
-		assert(len != 0);
-		clock_gettime(CLOCK_MONOTONIC, t2);
-	}
 
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
 	// (except the first) only starts at a newline.  If the reader
