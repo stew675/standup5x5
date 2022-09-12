@@ -31,12 +31,14 @@ static struct frequency {
 	uint32_t	tm4;		// Tiered Mask 4
 	uint32_t	tm5;		// Tiered Mask 5
 	uint32_t	tm6;		// Tiered Mask 6
-
-	atomic_int	pos;		// Position within a set
 	int		ready_to_setup;	//
-	uint32_t	pad[6];		// Pad to 64 byte boundary
+	int		b;
 
-	struct tier	sets[16];	// Tier Sets (384 bytes)
+	// Position within a set
+	atomic_int	pos __attribute__((aligned(64)));
+
+	// Tier Sets (384 bytes)
+	struct tier	sets[16] __attribute__((aligned(64)));
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -817,6 +819,10 @@ fsort()
 			*(uint64_t *)(frq + j) = *(uint64_t *)(frq + (j - 1));
 			*(uint64_t *)(frq + (j - 1)) = tmp;
 		}
+
+	// Set the bit indices
+	for (int i = 0; i < 26; i++)
+		frq[i].b = __builtin_ctz(frq[i].m);
 } // fsort
 
 // The role of this function is to re-arrange the key set according to all
@@ -830,12 +836,62 @@ fsort()
 void
 setup_frequency_sets()
 {
-	uint32_t *kp = keys;
-
 	fsort();
 
-	// Now set up our scan sets by lowest frequency to highest
+//	struct timespec t2[1], t3[1], t4[1];
+//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
+
+	uint32_t *bp[32] __attribute__((aligned(64)));
+	uint32_t map[32] __attribute__((aligned(64)));
+
+	// Setup for key spray
+	for (uint32_t i = 0, one = 1; i < 26; i++) {
+		bp[i] = tkeys[i];
+		map[frq[i].b] = (one << i);
+	}
+
+	// Spray keys to buckets
+	for (uint32_t *kp = keys, key; (key = *kp++); ) {
+		uint32_t mk = map[__builtin_ctz(key)];
+		uint32_t k = key & (key - 1);
+
+		mk |= map[__builtin_ctz(k)]; k &= k - 1;
+		mk |= map[__builtin_ctz(k)]; k &= k - 1;
+		mk |= map[__builtin_ctz(k)]; k &= k - 1;
+
+		*bp[__builtin_ctz(mk | map[__builtin_ctz(k)])]++ = key;
+	}
+
+//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
+
+	// Write poisons and kick off threads
 	for (int i = 0; i < 26; i++) {
+		struct frequency *f = frq + i;
+		struct tier *t = f->sets;
+
+		t->s = tkeys[i];
+		if ((t->l = bp[i] - t->s) > 0)
+			min_search_depth = i - 3;
+
+		// Poison bucket endings
+		for (uint32_t *ts = bp[i], p = NUM_POISON; p--; )
+			*ts++ = (uint32_t)(~0);
+
+		// Instruct any waiting worker thread to start setup
+		// but we have to do it ourselves if single threaded
+		f->ready_to_setup = 1;
+		if (nthreads == 1)
+			set_tier_offsets(f);
+	}
+
+//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t4);
+
+//	print_time_taken("Spray", t2, t3);
+//	print_time_taken("Finalise", t3, t4);
+#if 0
+
+	// Now set up our scan sets by lowest frequency to highest
+	for (uint32_t *kp = keys, i = 0; i < 26; i++) {
 		struct frequency *f = frq + i;
 		struct tier *t = f->sets;
 		uint32_t mask = f->m, *ks = kp, *ts, key;
@@ -865,6 +921,7 @@ setup_frequency_sets()
 		if (nthreads == 1)
 			set_tier_offsets(f);
 	}
+#endif
 
 	// Wait for all setups to complete
 	while(setups_done < 26)
