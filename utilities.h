@@ -1,7 +1,7 @@
 #include <immintrin.h>
 
 #define	HASHSZ          30383		// Emperically derived optimum
-#define MAX_READERS        15    	// Virtual systems don't like too many readers
+#define MAX_READERS         7   	// Virtual systems don't like too many readers
 #define	MAX_SOLUTIONS    8192
 #define	MAX_WORDS        8192
 #define	MAX_THREADS        64
@@ -226,44 +226,15 @@ hash_lookup(uint32_t key, const char *wp)
 
 // ********************* FILE READER ********************
 
-void
-process_five_word(char *w, uint32_t *ft)
-{
-	uint32_t key = calc_key(w);
-	if (__builtin_popcount(key) == 5) {
-		int pos = atomic_fetch_add(&num_words, 1);
-
-		// Get the key into the list as soon as possible
-		// to prevent holding up the hash table builder
-		wordkeys[pos] = key;
-
-		// Update frequency table and
-		// copy word at the same time
-		char a = 'a';
-		char *to = words + (5 * pos);
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to   = *w  ) - a]++;
-	}
-} // process_five_word
-
-
-// Because of setup overheads, AVX2 Scanning
-// benefits from larger read chunk sizes
-
-#ifdef __AVX2__
-#define READ_CHUNK        32768		// Appears to be optimum
-#else
-#define READ_CHUNK        10240		// Appears to be optimum
-#endif
+#define READ_CHUNK        65536		// Appears to be optimum
 
 void
 find_words(char *s, char *e, uint32_t rn)
 {
-	char a = 'a', z = 'z', nl = '\n';
 	uint32_t *ft = cf[rn];
+	char a = 'a', z = 'z', nl = '\n';
+	char *fives[READ_CHUNK / 5];
+	char **fivep = fives;
 
 #ifdef __AVX2__
 	// The following code makes the assumption that all
@@ -335,8 +306,9 @@ find_words(char *s, char *e, uint32_t rn)
 		// Process all complete words in the vector
 		while (nmask) {
 			// Process word if it has exactly 5 letters
-			if (__builtin_ctzll(wmask >> pos) == 5)
-				process_five_word(s + pos, ft);
+			*fivep = s + pos;
+			fivep += (__builtin_ctzll(wmask >> pos) == 5) &&
+				 (__builtin_popcount(calc_key(s + pos)) == 5);
 
 			// Get position of next word
 			pos = __builtin_ffsll(nmask);
@@ -347,8 +319,9 @@ find_words(char *s, char *e, uint32_t rn)
 	e += 64;
 #endif
 
-	char c, *w;
-	for (w = s; s < e; w = s) {
+	// Scalar code to find 5 words. This also
+	// handles residuals from the vector loop
+	for (char c, *w = s; s < e; w = s) {
 		c = *s++; if ((c < a) || (c > z)) continue;
 		c = *s++; if ((c < a) || (c > z)) continue;
 		c = *s++; if ((c < a) || (c > z)) continue;
@@ -356,12 +329,39 @@ find_words(char *s, char *e, uint32_t rn)
 		c = *s++; if ((c < a) || (c > z)) continue;
 
 		// We've now found 5 [a..z] characters in a row
-		c = *s++; if ((c < a) || (c > z)) 
-			process_five_word(w, ft);
+		c = *s++;
+		if ((c < a) || (c > z))  {
+			*fivep = w;
+			fivep += (__builtin_popcount(calc_key(w)) == 5);
+		}
 
 		// Just quickly find the next line
 		while (c != nl)
 			c = *s++;
+	}
+
+	// Bulk process all found unique 5 words
+	// If no words to process, return now
+	int num = fivep - fives;
+	if (num == 0)
+		return;
+
+	// Bulk reserve where to place the words
+	int pos = atomic_fetch_add(&num_words, num);
+	fivep = fives;
+	while (num--) {
+		char *w = *fivep++;
+		wordkeys[pos] = calc_key(w);
+
+		// Update frequency table and
+		// copy word at the same time
+		char a = 'a';
+		char *to = words + (5 * pos++);
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to++ = *w++) - a]++;
+		ft[(*to   = *w  ) - a]++;
 	}
 } // find_words
 
