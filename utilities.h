@@ -849,9 +849,6 @@ setup_frequency_sets()
 {
 	fsort();
 
-//	struct timespec t1[1], t2[1];
-//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
-
 	// Setup for key spray
 	uint32_t *bp[32] __attribute__((aligned(64)));
 	for (uint32_t i = 0; i < 26; i++)
@@ -885,64 +882,6 @@ setup_frequency_sets()
 		if (nthreads == 1)
 			set_tier_offsets(f);
 	}
-
-//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
-
-//	print_time_taken("Spray", t1, t2);
-
-//	struct timespec t1[1], t2[1];
-//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
-
-#if 0
-	// Now set up our scan sets by lowest frequency to highest
-	for (uint32_t *kp = keys, i = 0; i < 26; i++) {
-		struct frequency *f = frq + i;
-		struct tier *t = f->sets;
-		uint32_t mask = f->m, *ks = kp, *base = kp;
-		uint32_t *ts = (t->s = tkeys[i]);
-
-#ifdef USE_AVX2_SCAN
-		// Perform a vector scan of the keys
-		uint32_t *end = keys + nkeys;
-		__m256i vmask = _mm256_set1_epi32(mask);
-		while ((ks + 8) < end) {
-			__m256i vkeys = _mm256_loadu_si256((__m256i *)ks);
-			__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), vmask);
-			uint32_t vresmask = _mm256_movemask_epi8(vres) & 0x11111111;
-			while (vresmask) {
-				uint32_t i = __builtin_ctz(vresmask) >> 2;
-				vresmask &= vresmask - 1;
-
-				uint32_t key = ks[i];
-				ks[i] = *kp;
-				*kp++ = key;
-				*ts++ = key;
-			}
-			ks += 8;
-		}
-		// Drop through to handle residuals in a scalar fashion
-#endif
-		for (uint32_t key; (key = *ks); ks++)
-			if (key & mask) {
-				*ks = *kp;
-				*kp++ = key;
-				*ts++ = key;
-			}
-
-		// Calculate the set length and update
-		// the min_search_depth if needed
-		if ((t->l = ts - t->s) > 0)
-			min_search_depth = i - 3;
-
-		// Instruct any waiting worker thread to start setup
-		// but we have to do it ourselves if single threaded
-		f->ready_to_setup = 1;
-		if (nthreads == 1)
-			set_tier_offsets(f);
-	}
-//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
-//	print_time_taken("Scan", t1, t2);
-#endif
 
 	// Wait for all setups to complete
 	while(setups_done < 26)
