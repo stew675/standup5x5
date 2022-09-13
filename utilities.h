@@ -283,7 +283,8 @@ find_words(char *s, char *e, uint32_t rn)
 	__m256i zvec = _mm256_set1_epi8(z);
 #endif
 
-	while (s + 64 < e) {
+	e -= 64;
+	while (s < e) {
 		int pos = 0;
 
 #ifdef __AVX512F__
@@ -301,36 +302,35 @@ find_words(char *s, char *e, uint32_t rn)
 #else
 		// Here we're in AVX2 mode.  Emulate AVX512 mode by doing 2 loads
 
-		// Unaligned load of a vector with the next 32 characters
-		__m256i wvec = _mm256_loadu_si256((const __m256i_u *)s);
+		// Unaligned load of 2 vectors with the next 64 characters
+		__m256i wvec1 = _mm256_loadu_si256((const __m256i_u *)s);
+		__m256i wvec2 = _mm256_loadu_si256((const __m256i_u *)(s + 32));
 
 		// Find the newlines in the word vector
 		// nmask will have a 1-bit for every newline in the vector
-		__m256i nres = _mm256_cmpeq_epi8(nvec, wvec);
+		__m256i nres = _mm256_cmpeq_epi8(nvec, wvec1);
 		uint32_t nmask1 = _mm256_movemask_epi8(nres);
 
 		// Find the lower-case letters in the word vector
 		// wmask will have a 0-bit for every lower-case letter in the vector
-		__m256i wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec),
-					       _mm256_cmpgt_epi8(wvec, zvec));
+		__m256i wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec1),
+						_mm256_cmpgt_epi8(wvec1, zvec));
 		uint32_t wmask1 = _mm256_movemask_epi8(wres);
 
-		// Process another 32 characters
-		wvec = _mm256_loadu_si256((const __m256i_u *)(s + 32));
-		nres = _mm256_cmpeq_epi8(nvec, wvec);
+		// Load and process another 32 characters
+		nres = _mm256_cmpeq_epi8(nvec, wvec2);
 		uint64_t nmask = _mm256_movemask_epi8(nres);
-		wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec),
-					_mm256_cmpgt_epi8(wvec, zvec));
+		wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec2),
+					_mm256_cmpgt_epi8(wvec2, zvec));
 		uint64_t wmask = _mm256_movemask_epi8(wres);
 
 		nmask = nmask << 32 | nmask1;
 		wmask = wmask << 32 | wmask1;
 #endif
-		// Handle lines over 64 characters in length
-		if (!nmask) {
-			for (s += 64; s < e && *s++ != nl; );
-			continue;
-		}
+		// Handle lines over 64 characters in length.  Jump ahead just
+		// far enough such that we won't accidentally feed the last 5
+		// characters from an overly long line into the next pass
+		pos += !nmask * 58;
 
 		// Process all complete words in the vector
 		while (nmask) {
@@ -344,6 +344,7 @@ find_words(char *s, char *e, uint32_t rn)
 		}
 		s += pos;
 	}
+	e += 64;
 #endif
 
 	char c, *w;
