@@ -342,15 +342,12 @@ find_words(char *s, char *e, uint32_t rn)
 		// Grab another 32 characters
 		wvec = _mm256_loadu_si256((const __m256i_u *)(s + 32));
 		nres = _mm256_cmpeq_epi8(nvec, wvec);
-		uint32_t nmask2 = _mm256_movemask_epi8(nres);
+		uint64_t nmask = _mm256_movemask_epi8(nres);
 		wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec),
 					_mm256_cmpgt_epi8(wvec, zvec));
-		uint32_t wmask2 = _mm256_movemask_epi8(wres);
+		uint64_t wmask = _mm256_movemask_epi8(wres);
 
-		uint64_t nmask = nmask2;
 		nmask = nmask << 32 | nmask1;
-
-		uint64_t wmask = wmask2;
 		wmask = wmask << 32 | wmask1;
 
 		// Handle lines over 64 characters in length
