@@ -1,3 +1,5 @@
+#include <immintrin.h>
+
 #define	HASHSZ          30383		// Emperically derived optimum
 #define MAX_READERS        15    	// Virtual systems don't like too many readers
 #define	MAX_SOLUTIONS    8192
@@ -76,8 +78,9 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // We add 1024 here to MAX_WORDS to give us extra space to perform vector
 // alignments for the AVX functions.  At the very least the keys array must
 // be 32-byte aligned, but we align it to 64 bytes anyway
-static uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
-static uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
+static	uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
+static	uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
+static	uint32_t	unmap[32] __attribute__((aligned(64)));
 
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
@@ -249,7 +252,7 @@ process_five_word(char *w, uint32_t *ft)
 // Because of setup overheads, AVX2 Scanning
 // benefits from larger read chunk sizes
 
-#ifdef USE_AVX2_SCAN
+#ifdef __AVX2__
 #define READ_CHUNK        32768		// Appears to be optimum
 #else
 #define READ_CHUNK        10240		// Appears to be optimum
@@ -261,7 +264,7 @@ find_words(char *s, char *e, uint32_t rn)
 	char a = 'a', z = 'z', nl = '\n';
 	uint32_t *ft = cf[rn];
 
-#ifdef USE_AVX2_SCAN
+#ifdef __AVX2__
 	// The following code makes the assumption that all
 	// words will immediately follow a newline character
 
@@ -318,7 +321,7 @@ find_words(char *s, char *e, uint32_t rn)
 	__m256i avec = _mm256_set1_epi8(a);
 	__m256i zvec = _mm256_set1_epi8(z);
 
-	e -= 32;
+	e -= 64;
 	while (s < e) {
 		int pos = 0;
 
@@ -328,35 +331,47 @@ find_words(char *s, char *e, uint32_t rn)
 		// Find the newlines in the word vector
 		// nmask will have a 1-bit for every newline in the vector
 		__m256i nres = _mm256_cmpeq_epi8(nvec, wvec);
-		uint32_t nmask = _mm256_movemask_epi8(nres);
+		uint32_t nmask1 = _mm256_movemask_epi8(nres);
 
 		// Find the lower-case letters in the word vector
 		// wmask will have a 0-bit for every lower-case letter in the vector
 		__m256i wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec),
 					       _mm256_cmpgt_epi8(wvec, zvec));
-		uint32_t wmask = _mm256_movemask_epi8(wres);
+		uint32_t wmask1 = _mm256_movemask_epi8(wres);
 
-		// Get number of newlines in the vector
-		int nls = __builtin_popcount(nmask);
+		// Grab another 32 characters
+		wvec = _mm256_loadu_si256((const __m256i_u *)(s + 32));
+		nres = _mm256_cmpeq_epi8(nvec, wvec);
+		uint32_t nmask2 = _mm256_movemask_epi8(nres);
+		wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec),
+					_mm256_cmpgt_epi8(wvec, zvec));
+		uint32_t wmask2 = _mm256_movemask_epi8(wres);
 
-		// Handle words over 32 characters in length
-		if (nls == 0) {
-			for (s += 32; s < e && *s++ != nl; );
+		uint64_t nmask = nmask2;
+		nmask = nmask << 32 | nmask1;
+
+		uint64_t wmask = wmask2;
+		wmask = wmask << 32 | wmask1;
+
+		// Handle lines over 64 characters in length
+		if (!nmask) {
+			for (s += 64; s < e && *s++ != nl; );
 			continue;
 		}
 
 		// Process all complete words in the vector
-		while (nls--) {
+		while (nmask) {
 			// Process word if it has exactly 5 letters
-			if (__builtin_ctz(wmask >> pos) == 5)
+			if (__builtin_ctzll(wmask >> pos) == 5)
 				process_five_word(s + pos, ft);
 
 			// Get position of next word
-			pos += (__builtin_ctz(nmask >> pos) + 1);
+			pos = __builtin_ffsll(nmask);
+			nmask &= (nmask - 1);
 		}
 		s += pos;
 	}
-	e += 32;
+	e += 64;
 #endif
 #endif
 
@@ -663,7 +678,7 @@ setup_tkeys(struct frequency *f)
 	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
 	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
 	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
-	uint32_t	*ks, len, key;
+	uint32_t	*ks, len;
 	uint32_t	masks[16];
 
 	// XXX - Come up with a way to make this a loop
@@ -694,26 +709,22 @@ setup_tkeys(struct frequency *f)
 
 		len = t0->toff1;
 		while (len--)
-			if (!((key = *ks++) & mask))
-				*kp++ = key;
+			kp += !((*kp = *ks++) & mask);
 		ts->toff1 = kp - ts->s;
 
 		len = t0->toff2 - t0->toff1;
 		while (len--)
-			if (!((key = *ks++) & mask))
-				*kp++ = key;
+			kp += !((*kp = *ks++) & mask);
 		ts->toff2 = kp - ts->s;
 
 		len = t0->toff3 - t0->toff2;
 		while (len--)
-			if (!((key = *ks++) & mask))
-				*kp++ = key;
+			kp += !((*kp = *ks++) & mask);
 		ts->toff3 = kp - ts->s;
 
 		len = t0->l - t0->toff3;
 		while (len--)
-			if (!((key = *ks++) & mask))
-				*kp++ = key;
+			kp += !((*kp = *ks++) & mask);
 		ts->l = kp - ts->s;
 
 		for (uint32_t p = NUM_POISON; p--; )
@@ -730,16 +741,20 @@ set_tier_offsets(struct frequency *f)
 	uint32_t key, mask, len;
 	uint32_t *ks, *kp;
 
-	// Skip first set.  Nothing uses its subsets
-	if (f == frq)
-		goto set_tier_offsets_done;
-
 	// Wait here until all data is ready
 	while (!f->ready_to_setup)
 		asm("nop");
 
-	// uaeios
-	// Setup defaults.  set_tms() may alter these
+	// "poison" NUM_POISON ending values with all bits set
+	ks = t->s + t->l;
+	for (int p = NUM_POISON; p--; )
+		*ks++ = (uint32_t)(~0);
+
+	// Skip first set.  Nothing uses its subsets
+	if (f == frq)
+		goto set_tier_offsets_done;
+
+	// "uaeios" are the best static defaults
 	f->tm1 = 1 << ('u' - 'a');
 	f->tm2 = 1 << ('a' - 'a');
 	f->tm3 = 1 << ('e' - 'a');
@@ -752,16 +767,14 @@ set_tier_offsets(struct frequency *f)
 
 	mask = f->tm5;
 
-	// First subset has tm5, and then now
+	// First subset has tm5, and then not
 	ks = kp = t->s;
 	len = t->l;
-	for (; len--; ks++) {
-		key = *ks;
-		if (key & mask) {
+	for (; len--; ++ks)
+		if ((key = *ks) & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	}
 	t->toff2 = kp - t->s;
 
 	// Now organise the first tm5 subset into that which
@@ -774,31 +787,27 @@ set_tier_offsets(struct frequency *f)
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
 	len = t->toff2;
-	for (; len--; ks++) {
-		key = *ks;
-		if (key & mask) {
+	for (; len--; ++ks)
+		if ((key = *ks) & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	}
 	t->toff1 = kp - t->s;
 
 	// Second tm5 subset does not have tm6 then has
 	ks = kp = t->s + t->toff2;
 	len = t->l - t->toff2;
-	for (; len--; ks++) {
-		key = *ks;
-		if (!(key & mask)) {
+	for (; len--; ++ks)
+		if (!((key = *ks) & mask)) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	}
 	t->toff3 = kp - t->s;
 
 	setup_tkeys(f);
 
-	// Mark as done
 set_tier_offsets_done:
+	// Mark as done
 	atomic_fetch_add(&setups_done, 1);
 } // set_tier_offsets
 
@@ -808,8 +817,8 @@ set_tier_offsets_done:
 void
 fsort()
 {
-	for (int i = 1; i < 26; i++)
-		for (int j = i; j; j--) {
+	for (int i = 1; i < 26; ++i)
+		for (int j = i; j; --j) {
 			if (frq[j].f == 0)
 				break;
 			if (frq[j - 1].f && (frq[j].f > frq[j - 1].f))
@@ -821,8 +830,10 @@ fsort()
 		}
 
 	// Set the bit indices
-	for (int i = 0; i < 26; i++)
+	for (int i = 0, one = 1; i < 26; i++) {
 		frq[i].b = __builtin_ctz(frq[i].m);
+		unmap[frq[i].b] = (one << i);
+	}
 } // fsort
 
 // The role of this function is to re-arrange the key set according to all
@@ -838,33 +849,28 @@ setup_frequency_sets()
 {
 	fsort();
 
-//	struct timespec t2[1], t3[1], t4[1];
-//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
-
-	uint32_t *bp[32] __attribute__((aligned(64)));
-	uint32_t map[32] __attribute__((aligned(64)));
+//	struct timespec t1[1], t2[1];
+//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
 	// Setup for key spray
-	for (uint32_t i = 0, one = 1; i < 26; i++) {
+	uint32_t *bp[32] __attribute__((aligned(64)));
+	for (uint32_t i = 0; i < 26; i++)
 		bp[i] = tkeys[i];
-		map[frq[i].b] = (one << i);
-	}
 
 	// Spray keys to buckets
 	for (uint32_t *kp = keys, key; (key = *kp++); ) {
-		uint32_t mk = map[__builtin_ctz(key)];
+		uint32_t mk = unmap[__builtin_ctz(key)];
 		uint32_t k = key & (key - 1);
 
-		mk |= map[__builtin_ctz(k)]; k &= k - 1;
-		mk |= map[__builtin_ctz(k)]; k &= k - 1;
-		mk |= map[__builtin_ctz(k)]; k &= k - 1;
+		mk |= unmap[__builtin_ctz(k)]; k &= k - 1;
+		mk |= unmap[__builtin_ctz(k)]; k &= k - 1;
+		mk |= unmap[__builtin_ctz(k)]; k &= k - 1;
+		mk |= unmap[__builtin_ctz(k)];
 
-		*bp[__builtin_ctz(mk | map[__builtin_ctz(k)])]++ = key;
+		*bp[__builtin_ctz(mk)]++ = key;
 	}
 
-//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t3);
-
-	// Write poisons and kick off threads
+	// Determine min_search_depth and start worker threads
 	for (int i = 0; i < 26; i++) {
 		struct frequency *f = frq + i;
 		struct tier *t = f->sets;
@@ -873,10 +879,6 @@ setup_frequency_sets()
 		if ((t->l = bp[i] - t->s) > 0)
 			min_search_depth = i - 3;
 
-		// Poison bucket endings
-		for (uint32_t *ts = bp[i], p = NUM_POISON; p--; )
-			*ts++ = (uint32_t)(~0);
-
 		// Instruct any waiting worker thread to start setup
 		// but we have to do it ourselves if single threaded
 		f->ready_to_setup = 1;
@@ -884,43 +886,62 @@ setup_frequency_sets()
 			set_tier_offsets(f);
 	}
 
-//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t4);
+//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
 
-//	print_time_taken("Spray", t2, t3);
-//	print_time_taken("Finalise", t3, t4);
+//	print_time_taken("Spray", t1, t2);
+
+//	struct timespec t1[1], t2[1];
+//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
+
 #if 0
-
 	// Now set up our scan sets by lowest frequency to highest
 	for (uint32_t *kp = keys, i = 0; i < 26; i++) {
 		struct frequency *f = frq + i;
 		struct tier *t = f->sets;
-		uint32_t mask = f->m, *ks = kp, *ts, key;
+		uint32_t mask = f->m, *ks = kp, *base = kp;
+		uint32_t *ts = (t->s = tkeys[i]);
 
-		t->s = (ts = tkeys[i]);
-		while((key = *ks))
-			if (key & mask) {
-				*ks++ = *kp;
+#ifdef USE_AVX2_SCAN
+		// Perform a vector scan of the keys
+		uint32_t *end = keys + nkeys;
+		__m256i vmask = _mm256_set1_epi32(mask);
+		while ((ks + 8) < end) {
+			__m256i vkeys = _mm256_loadu_si256((__m256i *)ks);
+			__m256i vres = _mm256_cmpeq_epi32(_mm256_and_si256(vmask, vkeys), vmask);
+			uint32_t vresmask = _mm256_movemask_epi8(vres) & 0x11111111;
+			while (vresmask) {
+				uint32_t i = __builtin_ctz(vresmask) >> 2;
+				vresmask &= vresmask - 1;
+
+				uint32_t key = ks[i];
+				ks[i] = *kp;
 				*kp++ = key;
 				*ts++ = key;
-			} else
-				ks++;
+			}
+			ks += 8;
+		}
+		// Drop through to handle residuals in a scalar fashion
+#endif
+		for (uint32_t key; (key = *ks); ks++)
+			if (key & mask) {
+				*ks = *kp;
+				*kp++ = key;
+				*ts++ = key;
+			}
 
 		// Calculate the set length and update
 		// the min_search_depth if needed
 		if ((t->l = ts - t->s) > 0)
 			min_search_depth = i - 3;
 
-		// We can't do aligned AVX loads with the tiered approach.
-		// "poison" NUM_POISON ending values with all bits set
-		for (uint32_t p = NUM_POISON; p--; )
-			*ts++ = (uint32_t)(~0);
-
 		// Instruct any waiting worker thread to start setup
 		// but we have to do it ourselves if single threaded
 		f->ready_to_setup = 1;
 		if (nthreads == 1)
 			set_tier_offsets(f);
 	}
+//	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
+//	print_time_taken("Scan", t1, t2);
 #endif
 
 	// Wait for all setups to complete
