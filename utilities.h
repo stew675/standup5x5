@@ -72,7 +72,7 @@ uint32_t keymap[HASHSZ] __attribute__ ((aligned(64)));
 uint32_t posmap[HASHSZ] __attribute__ ((aligned(64)));
 
 // Allow for up to 3x the number of unique non-anagram words
-static char     words[MAX_WORDS * 15] __attribute__ ((aligned(64)));
+static char     words[MAX_WORDS * 24] __attribute__ ((aligned(64)));
 static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 
 // We add 1024 here to MAX_WORDS to give us extra space to perform vector
@@ -85,7 +85,7 @@ static	uint32_t	unmap[32] __attribute__((aligned(64)));
 // Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
 // alignment, this ensures all counters for each reader exist fully in 2 cache
 // lines independent to each reader, thereby minimising CPU cache contention
-static uint32_t cf[MAX_READERS][32] __attribute__ ((aligned(64))) = {0};
+//static uint32_t cf[MAX_READERS][32] __attribute__ ((aligned(64))) = {0};
 
 static void solve();
 static void solve_work();
@@ -188,7 +188,7 @@ hash_insert(uint32_t key, uint32_t pos)
 
 	// Now insert at hash location
 	keymap[hashpos] = key;
-	posmap[hashpos] = pos * 5;
+	posmap[hashpos] = pos << 3;
 
 	hash_collisions += col;
 
@@ -231,7 +231,6 @@ hash_lookup(uint32_t key, const char *wp)
 void
 find_words(char *s, char *e, uint32_t rn)
 {
-	uint32_t *ft = cf[rn];
 	char a = 'a', z = 'z', nl = '\n';
 	char *fives[READ_CHUNK / 5];
 	char **fivep = fives;
@@ -353,15 +352,8 @@ find_words(char *s, char *e, uint32_t rn)
 		char *w = *fivep++;
 		wordkeys[pos] = calc_key(w);
 
-		// Update frequency table and
-		// copy word at the same time
-		char a = 'a';
-		char *to = words + (5 * pos++);
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to++ = *w++) - a]++;
-		ft[(*to   = *w  ) - a]++;
+		// Copy word to word table as a single 64-bit copy
+		*(uint64_t *)(words + (pos++ << 3)) = *(uint64_t *)w;
 	}
 } // find_words
 
@@ -369,6 +361,9 @@ void
 file_reader(struct worker *work)
 {
 	uint32_t rn = work - workers;
+
+	struct timespec t1[1], t2[1];
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
 	// (except the first) only starts at a newline.  If the reader
@@ -395,17 +390,23 @@ file_reader(struct worker *work)
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
+//	print_time_taken("File Reader", t1, t2);
 } // file_reader
 
 uint64_t
 process_words()
 {
 	uint64_t spins = 0;
+	struct timespec t1[1], t2[1];
+	uint32_t cf[26] __attribute__ ((aligned(64))) = {0};
 
 	// We do hash_init() and frq_init() here after the reader threads
 	// start. This speeds up application load time as the OS needs to
 	// clear less memory on startup.  Also, by initialising here, we
 	// avoid blocking other work while initialisation occurs.
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
 	// Build hash table and final key set
 	hash_init();
@@ -428,17 +429,23 @@ process_words()
 			asm("nop");
 		}
 
-		if (hash_insert(key, pos))
+		if (hash_insert(key, pos++))
 			*k++ = key;
 
-		pos++;
+		// Get character frequencies
+		while (key) {
+			cf[__builtin_ctz(key)]++;
+			key &= key - 1;
+		}
 	}
 
 	// All readers are done.  Collate character frequency stats
 	frq_init();
 	for (int c = 0; c < 26; c++)
-		for (int r = 0; r < num_readers; r++)
-			frq[c].f += cf[r][c];
+		frq[c].f = cf[c];
+
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
+//	print_time_taken("Process Words", t1, t2);
 
 	return spins;
 } // process_words
@@ -498,6 +505,9 @@ spawn_readers(char *start, size_t len)
 	char *end = start + len;
 	pthread_t tid[1];
 
+	struct timespec t1[1], t2[1];
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
+
 	num_readers = len / (READ_CHUNK << 3);
 
 	if (num_readers > MAX_READERS)
@@ -537,6 +547,9 @@ spawn_readers(char *start, size_t len)
 		atomic_fetch_add(&readers_done, 1);
 
 	// The main thread processes the words as the reader threads find them
+	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
+//	print_time_taken("Spawn Readers", t1, t2);
+
 	process_words();
 } // spawn_readers
 
