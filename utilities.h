@@ -223,6 +223,19 @@ hash_lookup(uint32_t key, const char *wp)
 } // hash_lookup
 #undef key_hash
 
+void
+print_bits(char *label, uint64_t v)
+{
+	printf("%s ", label);
+	for (int i = 0; i < 64; i++) {
+		if (v >> 63)
+			printf("1");
+		else
+			printf("0");
+		v <<= 1;
+	}
+	printf("\n");
+} // print_bits
 
 // ********************* FILE READER ********************
 
@@ -255,8 +268,6 @@ find_words(char *s, char *e, uint32_t rn)
 
 	e -= 64;
 	while (s < e) {
-		int pos = 0;
-
 #ifdef __AVX512F__
 		// Unaligned load of a vector with the next 64 characters
 		__m512i wvec = _mm512_loadu_si512((const __m512i_u *)s);
@@ -294,15 +305,70 @@ find_words(char *s, char *e, uint32_t rn)
 					_mm256_cmpgt_epi8(wvec2, zvec));
 		uint64_t wmask = _mm256_movemask_epi8(wres);
 
-		nmask = nmask << 32 | nmask1;
-		wmask = wmask << 32 | wmask1;
+		nmask = (nmask << 32 | nmask1) << 1;
+		wmask = ((wmask << 32 | wmask1) << 1) | 1;
 #endif
 		// Handle lines over 64 characters in length.  Jump ahead just
 		// far enough such that we won't accidentally feed the last 5
 		// characters from an overly long line into the next pass
-		pos += !nmask * 58;
+		if (!nmask) {       // <- is never true for words_alpha.txt
+			s += 57;
+			continue;
+		}
 
+		print_bits("nl ", nmask);
+		// Calculate where to start for next loop
+		int nextpos = 63 - __builtin_clzll(nmask);
+
+		// Mask off anything after the last newline
+		wmask |= ~(0ULL) << nextpos;
+
+//		wmask = 0xc1FFFFFFFFFFFFFFULL;
+		print_bits("wm ", wmask);
+
+		uint64_t n1 = ~wmask;
+		print_bits("n1 ", n1);
+
+		uint64_t n2 = n1 & (wmask >> 5);
+		print_bits("n2 ", n2);
+
+		uint64_t n3 = n2 & (wmask << 1);
+		print_bits("n3 ", n3);
+
+		uint64_t n4 = n1 & (n1 >> 1);
+		print_bits("n4 ", n4);
+
+		uint64_t n5 = n4 & (n4 >> 2);
+		print_bits("n5 ", n5);
+
+		uint64_t n6 = n5 & (n5 >> 1);
+		print_bits("n6 ", n6);
+
+		uint64_t n7 = n3 & n6;
+		print_bits("n7 ", n7);
+
+#if 0
+			uint64_t n3 = n2 >> 2;
+			print_bits("n3 ", n3);
+			uint64_t n4 = n2 | n3;
+			print_bits("n4 ", n4);
+			uint64_t n5 = wmask >> 4;
+			print_bits("n5 ", n5);
+			uint64_t n6 = n4 | n5;
+			print_bits("n6 ", n6);
+			uint64_t n7 = n6 >> 1;
+			print_bits("n7 ", n7);
+			uint64_t n8 = n6 ^ n7;
+			print_bits("n8 ", n8);
+			uint64_t n9 = n8 >> 1;
+			print_bits("n9 ", n9);
+			uint64_t n10 = n8 & n9;
+			print_bits("n10", n10);
+#endif
+
+		printf("\n");
 		// Process all complete words in the vector
+		int pos = 0;
 		while (nmask) {
 			// Process word if it has exactly 5 letters
 			*fivep = s + pos;
@@ -313,7 +379,7 @@ find_words(char *s, char *e, uint32_t rn)
 			pos = __builtin_ctzll(nmask) + 1;
 			nmask &= (nmask - 1);
 		}
-		s += pos;
+		s += nextpos;
 	}
 	e += 64;
 #endif
