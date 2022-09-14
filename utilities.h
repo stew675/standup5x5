@@ -223,6 +223,8 @@ hash_lookup(uint32_t key, const char *wp)
 } // hash_lookup
 #undef key_hash
 
+// Just a handy debugging function which was used when developing the
+// 5 letter word extraction bit masking algorithm within find_words()
 void
 print_bits(char *label, uint64_t v)
 {
@@ -249,9 +251,6 @@ find_words(char *s, char *e, uint32_t rn)
 	char **fivep = fives;
 
 #ifdef __AVX2__
-	// The following code makes the assumption that all
-	// words will immediately follow a newline character
-
 	// AVX512 is about 10% faster than AVX2 for processing the words
 	// Use AVX512 if the current platform supports it
 
@@ -305,79 +304,64 @@ find_words(char *s, char *e, uint32_t rn)
 					_mm256_cmpgt_epi8(wvec2, zvec));
 		uint64_t wmask = _mm256_movemask_epi8(wres);
 
-		nmask = (nmask << 32 | nmask1) << 1;
-		wmask = ((wmask << 32 | wmask1) << 1) | 1;
+		// Merge the results of the two loads
+		wmask = (wmask << 32) | wmask1;
+		nmask = (nmask << 32) | nmask1;
 #endif
-		// Handle lines over 64 characters in length.  Jump ahead just
+
+		// Insert a dummy newline at the very start
+		wmask = (wmask << 1) | 1;
+
+		// Need to adjust nmask as well
+		nmask <<= 1;
+
+		// Handle lines over 63 characters in length.  Jump ahead just
 		// far enough such that we won't accidentally feed the last 5
 		// characters from an overly long line into the next pass
-		if (!nmask) {       // <- is never true for words_alpha.txt
+		// !nmask is never true for words_alpha.txt, so the CPU branch
+		// predictor should never get this wrong
+		if (!nmask) {
 			s += 57;
 			continue;
 		}
 
-		print_bits("nl ", nmask);
-		// Calculate where to start for next loop
+		// Calculate where to start the next loop pass
 		int nextpos = 63 - __builtin_clzll(nmask);
 
-		// Mask off anything after the last newline
+		// Invalidate everything after the last newline
 		wmask |= ~(0ULL) << nextpos;
 
-//		wmask = 0xc1FFFFFFFFFFFFFFULL;
-		print_bits("wm ", wmask);
+		// Get 1's complement of wmask
+		uint64_t ocwm = ~wmask;
 
-		uint64_t n1 = ~wmask;
-		print_bits("n1 ", n1);
+		// Isolate all words of 5 characters or less
+		uint64_t five_or_less = (ocwm & (wmask >> 5)) & (wmask << 1);
 
-		uint64_t n2 = n1 & (wmask >> 5);
-		print_bits("n2 ", n2);
+		// Prune words with less than 5 characters
+		uint64_t not_less_than_five = ((ocwm & (ocwm >> 1)) >> 2) >> 1;
 
-		uint64_t n3 = n2 & (wmask << 1);
-		print_bits("n3 ", n3);
+		// Intersect five_or_less with not_less_than_five
+		wmask = five_or_less & not_less_than_five;
 
-		uint64_t n4 = n1 & (n1 >> 1);
-		print_bits("n4 ", n4);
+		// Remove the dummy starting newline
+		wmask >>= 1;
 
-		uint64_t n5 = n4 & (n4 >> 2);
-		print_bits("n5 ", n5);
+		// wmask will now contain a 1 bit located at the
+		// start of every word with exactly 5 letters
 
-		uint64_t n6 = n5 & (n5 >> 1);
-		print_bits("n6 ", n6);
+		// Process all 5 letter words in the vector
+		while (wmask) {
+			// Get a pointer to the start of the 5 letter word
+			char *w = s + __builtin_ctzll(wmask);
 
-		uint64_t n7 = n3 & n6;
-		print_bits("n7 ", n7);
+			// Add word to our list
+			*fivep = w;
 
-#if 0
-			uint64_t n3 = n2 >> 2;
-			print_bits("n3 ", n3);
-			uint64_t n4 = n2 | n3;
-			print_bits("n4 ", n4);
-			uint64_t n5 = wmask >> 4;
-			print_bits("n5 ", n5);
-			uint64_t n6 = n4 | n5;
-			print_bits("n6 ", n6);
-			uint64_t n7 = n6 >> 1;
-			print_bits("n7 ", n7);
-			uint64_t n8 = n6 ^ n7;
-			print_bits("n8 ", n8);
-			uint64_t n9 = n8 >> 1;
-			print_bits("n9 ", n9);
-			uint64_t n10 = n8 & n9;
-			print_bits("n10", n10);
-#endif
+			// Advance list if word has no duplicate characters
+			fivep += (__builtin_popcount(calc_key(w)) == 5);
 
-		printf("\n");
-		// Process all complete words in the vector
-		int pos = 0;
-		while (nmask) {
-			// Process word if it has exactly 5 letters
-			*fivep = s + pos;
-			fivep += (__builtin_ctzll(wmask >> pos) == 5) &&
-				 (__builtin_popcountll(calc_key(s + pos)) == 5);
-
-			// Get position of next word
-			pos = __builtin_ctzll(nmask) + 1;
-			nmask &= (nmask - 1);
+			// Unset the lowest bit
+			wmask &= (wmask - 1);
 		}
 		s += nextpos;
 	}
