@@ -1,10 +1,10 @@
 #include <immintrin.h>
 
 #define	HASHSZ          30383		// Emperically derived optimum
-#define MAX_READERS         7   	// Virtual systems don't like too many readers
+#define MAX_READERS         8   	// Virtual systems don't like too many readers
 #define	MAX_SOLUTIONS    8192
 #define	MAX_WORDS        8192
-#define	MAX_THREADS        64
+#define	MAX_THREADS        14
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -51,9 +51,12 @@ atomic_int	setup_set	__attribute__ ((aligned(64))) = 0;
 atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
+atomic_int	first_rdr_done	__attribute__ ((aligned(64))) = 0;
 
 // Put volatile thread sync variables on their own CPU cache line
-volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
+static volatile int	workers_start	__attribute__ ((aligned(64))) = 0;
+static volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
+static volatile int	num_readers	__attribute__ ((aligned(64))) = 0;
 
 // Put general global variables on their own CPU cache line
 static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
@@ -61,7 +64,6 @@ static uint32_t hash_collisions = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
-static int	num_readers = 0;
 
 // We build the solutions directly as a character array to write out when done
 static char     solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
@@ -81,11 +83,6 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 static	uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
 static	uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
 static	uint32_t	unmap[32] __attribute__((aligned(64)));
-
-// Here we pad the frequency counters to 32, instead of 26.  With the 64-byte
-// alignment, this ensures all counters for each reader exist fully in 2 cache
-// lines independent to each reader, thereby minimising CPU cache contention
-//static uint32_t cf[MAX_READERS][32] __attribute__ ((aligned(64))) = {0};
 
 static void solve();
 static void solve_work();
@@ -412,9 +409,6 @@ file_reader(struct worker *work)
 {
 	uint32_t rn = work - workers;
 
-	struct timespec t1[1], t2[1];
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
-
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
 	// (except the first) only starts at a newline.  If the reader
 	// starts at the very start of a 5 letter word, that means that it
@@ -440,23 +434,18 @@ file_reader(struct worker *work)
 	} while (1);
 
 	atomic_fetch_add(&readers_done, 1);
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
-//	print_time_taken("File Reader", t1, t2);
 } // file_reader
 
 uint64_t
 process_words()
 {
 	uint64_t spins = 0;
-	struct timespec t1[1], t2[1];
 	uint32_t cf[26] __attribute__ ((aligned(64))) = {0};
 
 	// We do hash_init() and frq_init() here after the reader threads
 	// start. This speeds up application load time as the OS needs to
 	// clear less memory on startup.  Also, by initialising here, we
 	// avoid blocking other work while initialisation occurs.
-
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
 	// Build hash table and final key set
 	hash_init();
@@ -494,9 +483,6 @@ process_words()
 	for (int c = 0; c < 26; c++)
 		frq[c].f = cf[c];
 
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
-//	print_time_taken("Process Words", t1, t2);
-
 	return spins;
 } // process_words
 
@@ -518,14 +504,12 @@ work_pool(void *arg)
 	if (pthread_detach(pthread_self()))
 		perror("pthread_detach");
 
+	// Wait until told to start
+	while (!workers_start)
+		asm("nop");
+
 	if (worker_num < num_readers)
 		file_reader(work);
-
-	if (worker_num == num_readers)
-		for (int i = worker_num + 1; i < nthreads; i++) {
-			pthread_t tid[1];
-			pthread_create(tid, NULL, work_pool, workers + i);
-		}
 
 #ifndef NO_FREQ_SETUP
 	while (1) {
@@ -541,7 +525,7 @@ work_pool(void *arg)
 	// Not gonna lie.  This is ugly.  We're busy-waiting until we get
 	// told to start solving.  It shouldn't be for too long though...
 	// I tried many different methods but this was always the fastest
-	while (!go_solve && (setups_done < 26))
+	while (!go_solve)
 		asm("nop");
 
 	solve_work();
@@ -551,12 +535,7 @@ work_pool(void *arg)
 void
 spawn_readers(char *start, size_t len)
 {
-	int main_must_read = 1;
 	char *end = start + len;
-	pthread_t tid[1];
-
-	struct timespec t1[1], t2[1];
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
 	num_readers = len / (READ_CHUNK << 3);
 
@@ -572,34 +551,21 @@ spawn_readers(char *start, size_t len)
 		workers[i].end = end;
 	}
 
-	if (num_readers > 1) {
-		// Need to zero out the word table so that the main thread can
-		// detect when a word key has been written by a reader thread
-		// The main thread doesn't do reading if num_readers > 1
+	// Need to zero out the word table so that the main thread can
+	// detect when a word key has been written by a reader thread
+	if (num_readers > 1)
 		memset(wordkeys, 0, sizeof(wordkeys));
 
-		// Spawn reader threads
-		for (int i = 1; i < num_readers; i++)
-			pthread_create(tid, NULL, work_pool, workers + i);
-
-		if (num_readers > 3)
-			main_must_read = 0;
-	}
-
-	// Spawn a thread that will create the rest of the worker threads
-	if (num_readers < nthreads)
-		pthread_create(tid, NULL, work_pool, workers + num_readers);
+	// Start any waiting workers
+	workers_start = 1;
 
 	// Check if main thread must do reading
-	if (main_must_read)
+	if (num_readers < 4)
 		file_reader(workers);
 	else
 		atomic_fetch_add(&readers_done, 1);
 
 	// The main thread processes the words as the reader threads find them
-	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t2);
-//	print_time_taken("Spawn Readers", t1, t2);
-
 	process_words();
 } // spawn_readers
 
@@ -932,6 +898,7 @@ main(int argc, char *argv[])
 {
 	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
+	pthread_t tid[1];
 
 	// Copy in the default file-name
 	strcpy(file, "words_alpha.txt");
@@ -975,6 +942,9 @@ main(int argc, char *argv[])
 		nthreads = 1;
 	if (nthreads > MAX_THREADS)
 		nthreads = MAX_THREADS;
+
+	for (int i = 1; i < nthreads; i++)
+		pthread_create(tid, NULL, work_pool, workers + i);
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 

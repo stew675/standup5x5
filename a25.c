@@ -262,6 +262,7 @@ main(int argc, char *argv[])
 {
 	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
+	pthread_t tid[1];
 
 	// Copy in a default file-name
 	strcpy(file, "words_alpha.txt");
@@ -305,6 +306,8 @@ main(int argc, char *argv[])
 		nthreads = 1;
 	if (nthreads > MAX_THREADS)
 		nthreads = MAX_THREADS;
+        for (int i = 1; i < nthreads; i++)
+                pthread_create(tid, NULL, work_pool, workers + i);
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t1);
 
