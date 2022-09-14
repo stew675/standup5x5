@@ -537,7 +537,7 @@ spawn_readers(char *start, size_t len)
 {
 	char *end = start + len;
 
-	num_readers = len / (READ_CHUNK << 3);
+	num_readers = (len / READ_CHUNK) + 1;
 
 	if (num_readers > MAX_READERS)
 		num_readers = MAX_READERS;
@@ -560,7 +560,7 @@ spawn_readers(char *start, size_t len)
 	workers_start = 1;
 
 	// Check if main thread must do reading
-	if (num_readers < 4)
+	if (num_readers < 2)
 		file_reader(workers);
 	else
 		atomic_fetch_add(&readers_done, 1);
