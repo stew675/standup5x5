@@ -307,10 +307,10 @@ find_words(char *s, char *e, uint32_t rn)
 			// Process word if it has exactly 5 letters
 			*fivep = s + pos;
 			fivep += (__builtin_ctzll(wmask >> pos) == 5) &&
-				 (__builtin_popcount(calc_key(s + pos)) == 5);
+				 (__builtin_popcountll(calc_key(s + pos)) == 5);
 
 			// Get position of next word
-			pos = __builtin_ffsll(nmask);
+			pos = __builtin_ctzll(nmask) + 1;
 			nmask &= (nmask - 1);
 		}
 		s += pos;
