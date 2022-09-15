@@ -305,20 +305,13 @@ find_words(char *s, char *e, uint32_t rn)
 		wmask = (wmask << 32) | wmask1;
 		nmask = (nmask << 32) | nmask1;
 #endif
-
-		// Insert a dummy newline at the very start
-		wmask = (wmask << 1) | 1;
-
-		// Need to adjust nmask as well
-		nmask <<= 1;
-
-		// Handle lines over 63 characters in length.  Jump ahead just
+		// Handle lines over 64 characters in length.  Jump ahead just
 		// far enough such that we won't accidentally feed the last 5
 		// characters from an overly long line into the next pass
 		// !nmask is never true for words_alpha.txt, so the CPU branch
 		// predictor should never get this wrong
 		if (!nmask) {
-			s += 57;
+			s += 58;
 			continue;
 		}
 
@@ -326,22 +319,19 @@ find_words(char *s, char *e, uint32_t rn)
 		int nextpos = 63 - __builtin_clzll(nmask);
 
 		// Invalidate everything after the last newline
-		wmask |= ~(0ULL) << nextpos;
+		wmask |= ~(0ULL) << nextpos++;
 
 		// Get 1's complement of wmask
 		uint64_t ocwm = ~wmask;
 
 		// Isolate all words of 5 characters or less
-		uint64_t five_or_less = (ocwm & (wmask >> 5)) & (wmask << 1);
+		uint64_t five_or_less = ocwm & (wmask >> 5) & ((wmask << 1) | 1);
 
 		// Prune words with less than 5 characters
 		uint64_t not_less_than_five = ((ocwm & (ocwm >> 1)) >> 2) >> 1;
 
 		// Intersect five_or_less with not_less_than_five
 		wmask = five_or_less & not_less_than_five;
-
-		// Remove the dummy starting newline
-		wmask >>= 1;
 
 		// wmask will now contain a 1 bit located at the
 		// start of every word with exactly 5 letters
