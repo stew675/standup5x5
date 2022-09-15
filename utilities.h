@@ -4,7 +4,7 @@
 #define MAX_READERS         8   	// Virtual systems don't like too many readers
 #define	MAX_SOLUTIONS    8192
 #define	MAX_WORDS        8192
-#define	MAX_THREADS        14
+#define	MAX_THREADS        16
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -144,16 +144,13 @@ get_nthreads()
 static inline uint32_t
 calc_key(const char *wd)
 {
-	uint32_t one = 1, a = 'a';
-	uint32_t key;
-
-	key  = (one << (*wd++ - a));
-	key |= (one << (*wd++ - a));
-	key |= (one << (*wd++ - a));
-	key |= (one << (*wd++ - a));
-	key |= (one << (*wd   - a));
-
-	return key;
+	uint32_t one = 1, mask = 0x1F;
+	uint32_t key = (one << (wd[0] & mask)) |
+                       (one << (wd[1] & mask)) |
+                       (one << (wd[2] & mask)) |
+                       (one << (wd[3] & mask)) |
+                       (one << (wd[4] & mask));
+	return key >> 1;
 } // calc_key
 
 //********************* HASH TABLE FUNCTIONS **********************
@@ -398,6 +395,9 @@ void
 file_reader(struct worker *work)
 {
 	uint32_t rn = work - workers;
+	struct timespec t1[1], t2[1];
+
+	clock_gettime(CLOCK_MONOTONIC, t1);
 
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
 	// (except the first) only starts at a newline.  If the reader
@@ -423,6 +423,8 @@ file_reader(struct worker *work)
 		find_words(s, e, rn);
 	} while (1);
 
+	clock_gettime(CLOCK_MONOTONIC, t2);
+//	print_time_taken("Find Words", t1, t2);
 	atomic_fetch_add(&readers_done, 1);
 } // file_reader
 
