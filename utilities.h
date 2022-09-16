@@ -238,7 +238,11 @@ print_bits(char *label, uint64_t v)
 
 // ********************* FILE READER ********************
 
+#ifdef __AVX2__
 #define READ_CHUNK        65536		// Appears to be optimum
+#else
+#define READ_CHUNK        10240		// Appears to be optimum
+#endif
 
 void
 find_words(char *s, char *e, uint32_t rn)
@@ -251,7 +255,7 @@ find_words(char *s, char *e, uint32_t rn)
 	// AVX512 is about 10% faster than AVX2 for processing the words
 	// Use AVX512 if the current platform supports it
 
-	// Prepare 3 constant vectors with newlines, a's and z's
+	// Prepare 2 constant vectors with all a's and all z's
 #ifdef __AVX512F__
 	__m512i avec = _mm512_set1_epi8(a);
 	__m512i zvec = _mm512_set1_epi8(z);
@@ -317,10 +321,10 @@ find_words(char *s, char *e, uint32_t rn)
 		uint64_t five_or_less = ocwm & (wmask >> 5) & ((wmask << 1) | 1);
 
 		// Prune words with less than 5 characters
-		ocwm &= (owcm >> 1);
+		ocwm = ((ocwm >> 1) & (ocwm >> 2));
 
 		// Intersect five_or_less with not_less_than_five
-		wmask = five_or_less & ocwm & (ocwm >> 2);
+		wmask = ocwm & (ocwm >> 2) & five_or_less;
 
 		// wmask will now contain a 1 bit located at the
 		// start of every word with exactly 5 letters
