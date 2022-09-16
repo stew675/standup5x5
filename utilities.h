@@ -177,7 +177,7 @@ hash_insert(uint32_t key, uint32_t pos)
 			return 0;
 
 		if (++hashpos == HASHSZ)
-			hashpos -= HASHSZ;
+			hashpos = 0;
 	} while (1);
 
 	// Now insert at hash location
@@ -186,7 +186,7 @@ hash_insert(uint32_t key, uint32_t pos)
 
 	hash_collisions += col;
 
-	return key;
+	return 1;
 } // hash_insert
 
 const char *
@@ -301,12 +301,10 @@ find_words(char *s, char *e, uint32_t rn)
 		// Calculate where to start the next loop pass
 		int nextpos = 64 - __builtin_clzll(wmask);
 
-		// Invalidate everything after the last non-lower-case. We
-		// use (nextpos - 1) here because consider where wmask has
-		// the top bit set. A 64-bit value << 64 is a no-op, so the
-		// value doesn't change.  So we do the -1 which gives us
-		// the top bit set followed by all 0's.  Since the top bit
-		// is set anyway, this still works
+		// Invalidate everything after the last non-lower-case. We use
+		// (nextpos - 1) here because consider where wmask has the top
+		// bit set. A 64-bit value << 64 is a no-op, so the value does
+		// not change.  So we do the -1 since the MSB is set anyway
 		wmask |= ~(0ULL) << (nextpos - 1);
 
 		// Get 1's complement of wmask
@@ -451,8 +449,9 @@ process_words()
 			asm("nop");
 		}
 
-		if (hash_insert(key, pos++))
-			*k++ = key;
+		*k = key;
+		k += hash_insert(key, pos);
+		pos++;
 
 		// Get character frequencies
 		while (key) {
@@ -813,7 +812,7 @@ fsort()
 			*(uint64_t *)(frq + (j - 1)) = tmp;
 		}
 
-	// Set the bit indices
+	// Set the bit indices and the unmap table
 	for (int i = 0, one = 1; i < 26; i++) {
 		frq[i].b = __builtin_ctz(frq[i].m);
 		unmap[frq[i].b] = (one << i);
@@ -857,7 +856,8 @@ setup_frequency_sets()
 		struct tier *t = f->sets;
 
 		t->s = tkeys[i];
-		if ((t->l = bp[i] - t->s) > 0)
+		t->l = bp[i] - t->s;
+		if (t->l > 0)
 			min_search_depth = i - 3;
 
 		// Instruct any waiting worker thread to start setup
