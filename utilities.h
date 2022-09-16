@@ -240,7 +240,7 @@ print_bits(char *label, uint64_t v)
 void
 find_words(char *s, char *e, uint32_t rn)
 {
-	char a = 'a', z = 'z', nl = '\n';
+	char a = 'a', z = 'z';
 	char *fives[READ_CHUNK / 5];
 	char **fivep = fives;
 
@@ -250,11 +250,9 @@ find_words(char *s, char *e, uint32_t rn)
 
 	// Prepare 3 constant vectors with newlines, a's and z's
 #ifdef __AVX512F__
-	__m512i nvec = _mm512_set1_epi8(nl);
 	__m512i avec = _mm512_set1_epi8(a);
 	__m512i zvec = _mm512_set1_epi8(z);
 #else
-	__m256i nvec = _mm256_set1_epi8(nl);
 	__m256i avec = _mm256_set1_epi8(a);
 	__m256i zvec = _mm256_set1_epi8(z);
 #endif
@@ -264,10 +262,6 @@ find_words(char *s, char *e, uint32_t rn)
 #ifdef __AVX512F__
 		// Unaligned load of a vector with the next 64 characters
 		__m512i wvec = _mm512_loadu_si512((const __m512i_u *)s);
-
-		// Find the newlines in the word vector
-		// nmask will have a 1-bit for every newline in the vector
-		uint64_t nmask = _mm512_cmpeq_epi8_mask(nvec, wvec);
 
 		// Find the lower-case letters in the word vector
 		// wmask will have a 0-bit for every lower-case letter in the vector
@@ -280,11 +274,6 @@ find_words(char *s, char *e, uint32_t rn)
 		__m256i wvec1 = _mm256_loadu_si256((const __m256i_u *)s);
 		__m256i wvec2 = _mm256_loadu_si256((const __m256i_u *)(s + 32));
 
-		// Find the newlines in the word vector
-		// nmask will have a 1-bit for every newline in the vector
-		__m256i nres = _mm256_cmpeq_epi8(nvec, wvec1);
-		uint32_t nmask1 = _mm256_movemask_epi8(nres);
-
 		// Find the lower-case letters in the word vector
 		// wmask will have a 0-bit for every lower-case letter in the vector
 		__m256i wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec1),
@@ -292,31 +281,33 @@ find_words(char *s, char *e, uint32_t rn)
 		uint32_t wmask1 = _mm256_movemask_epi8(wres);
 
 		// Load and process another 32 characters
-		nres = _mm256_cmpeq_epi8(nvec, wvec2);
-		uint64_t nmask = _mm256_movemask_epi8(nres);
 		wres = _mm256_or_si256(_mm256_cmpgt_epi8(avec, wvec2),
 					_mm256_cmpgt_epi8(wvec2, zvec));
 		uint64_t wmask = _mm256_movemask_epi8(wres);
 
 		// Merge the results of the two loads
 		wmask = (wmask << 32) | wmask1;
-		nmask = (nmask << 32) | nmask1;
 #endif
 		// Handle lines over 64 characters in length.  Jump ahead just
 		// far enough such that we won't accidentally feed the last 5
 		// characters from an overly long line into the next pass
 		// !nmask is never true for words_alpha.txt, so the CPU branch
 		// predictor should never get this wrong
-		if (!nmask) {
+		if (!wmask) {
 			s += 58;
 			continue;
 		}
 
 		// Calculate where to start the next loop pass
-		int nextpos = 63 - __builtin_clzll(nmask);
+		int nextpos = 64 - __builtin_clzll(wmask);
 
-		// Invalidate everything after the last newline
-		wmask |= ~(0ULL) << nextpos++;
+		// Invalidate everything after the last non-lower-case. We
+		// use (nextpos - 1) here because consider where wmask has
+		// the top bit set. A 64-bit value << 64 is a no-op, so the
+		// value doesn't change.  So we do the -1 which gives us
+		// the top bit set followed by all 0's.  Since the top bit
+		// is set anyway, this still works
+		wmask |= ~(0ULL) << (nextpos - 1);
 
 		// Get 1's complement of wmask
 		uint64_t ocwm = ~wmask;
@@ -369,7 +360,7 @@ find_words(char *s, char *e, uint32_t rn)
 		}
 
 		// Just quickly find the next line
-		while (c != nl)
+		while (c != '\n')
 			c = *s++;
 	}
 
