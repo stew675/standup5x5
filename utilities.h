@@ -1,10 +1,10 @@
 #include <immintrin.h>
 
-#define	HASHSZ          30383		// Emperically derived optimum
-#define MAX_READERS         8   	// Virtual systems don't like too many readers
-#define	MAX_SOLUTIONS    8192
-#define	MAX_WORDS        8192
-#define	MAX_THREADS        16
+#define HASHBITS                  15
+#define MAX_SOLUTIONS           8192
+#define MAX_WORDS               8192
+#define MAX_THREADS               16
+#define MAX_READERS                8   	// Virtual systems don't like too many readers
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -68,11 +68,6 @@ static int	nkeys = 0;
 // We build the solutions directly as a character array to write out when done
 static char     solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
 
-// Key Hash Entries
-// We keep keys and positions in separate array because faster to initialise
-uint32_t keymap[HASHSZ] __attribute__ ((aligned(64)));
-uint32_t posmap[HASHSZ] __attribute__ ((aligned(64)));
-
 // Allow for up to 3x the number of unique non-anagram words
 static char     words[MAX_WORDS * 24] __attribute__ ((aligned(64)));
 static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
@@ -108,13 +103,6 @@ frq_init()
 	for (int b = 0; b < 26; b++)
 		frq[b].m = (1UL << b);	// The bit mask
 } // frq_init
-
-static void
-hash_init()
-{
-	memset(keymap, 0, sizeof(keymap));
-} // hash_init
-
 
 //********************* UTILITY FUNCTIONS **********************
 
@@ -157,7 +145,22 @@ calc_key(const char *wd)
 
 // A very simple for-purpose hash map implementation.  Used to
 // lookup words given the key representation of that word
-#define key_hash(x)	(x % HASHSZ)
+
+#define	HASHSZ       (1 << HASHBITS)
+#define HASHMASK        (HASHSZ - 1)
+#define key_hash(x)	(((x * 5287) ^ (x >> 11)) & HASHMASK)
+
+// Key Hash Entries
+// We keep keys and positions in separate array because faster to initialise
+uint32_t keymap[HASHSZ] __attribute__ ((aligned(64)));
+uint32_t posmap[HASHSZ] __attribute__ ((aligned(64)));
+
+static void
+hash_init()
+{
+	memset(keymap, 0, sizeof(keymap));
+} // hash_init
+
 uint32_t
 hash_insert(uint32_t key, uint32_t pos)
 {
@@ -314,10 +317,10 @@ find_words(char *s, char *e, uint32_t rn)
 		uint64_t five_or_less = ocwm & (wmask >> 5) & ((wmask << 1) | 1);
 
 		// Prune words with less than 5 characters
-		uint64_t not_less_than_five = ((ocwm & (ocwm >> 1)) >> 2) >> 1;
+		ocwm &= (owcm >> 1);
 
 		// Intersect five_or_less with not_less_than_five
-		wmask = five_or_less & not_less_than_five;
+		wmask = five_or_less & ocwm & (ocwm >> 2);
 
 		// wmask will now contain a 1 bit located at the
 		// start of every word with exactly 5 letters
