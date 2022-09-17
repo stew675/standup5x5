@@ -1,10 +1,10 @@
 #include <immintrin.h>
 
-#define HASHBITS                  15
-#define MAX_SOLUTIONS           8192
-#define MAX_WORDS               8192
-#define MAX_THREADS               16
-#define MAX_READERS                8   	// Virtual systems don't like too many readers
+#define HASHBITS              15
+#define MAX_SOLUTIONS       8192
+#define MAX_WORDS           8192
+#define MAX_THREADS           16
+#define MAX_READERS            8	// Virtual systems don't like too many readers
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -145,11 +145,14 @@ calc_key(const char *wd)
 
 // A very simple for-purpose hash map implementation.  Used to
 // lookup words given the key representation of that word
+// I've included 3 decent key_hash() functions here. All should
+// work decently for most English 5-letter words @ HASHBITS = 15
 
-#define	HASHSZ       (1 << HASHBITS)
+#define	HASHSZ          (1 << HASHBITS)
 #define HASHMASK        (HASHSZ - 1)
-#define key_hash(x)	(((x * 13334) ^ x ^ (x >> 12)) & HASHMASK)
-//#define key_hash(x) (x ^ (x >> 6) ^ (x >> 10) ^ (~x >> 1)) & HASHMASK
+#define key_hash(x)	(((x * 5287) ^ (x >> 11)) & HASHMASK)
+//#define key_hash(x)	(((x * 13334) ^ x ^ (x >> 12)) & HASHMASK)
+//#define key_hash(x)	(x ^ (x >> 6) ^ (x >> 10) ^ (~x >> 1)) & HASHMASK
 
 // Key Hash Entries
 // We keep keys and positions in separate array because faster to initialise
@@ -385,13 +388,16 @@ find_words(char *s, char *e, uint32_t rn)
 	}
 } // find_words
 
+//#define FILE_READER_TIMES
+
 void
 file_reader(struct worker *work)
 {
 	uint32_t rn = work - workers;
+#ifdef FILE_READER_TIMES
 	struct timespec t1[1], t2[1];
-
 	clock_gettime(CLOCK_MONOTONIC, t1);
+#endif
 
 	// The e = s + (READ_CHUNK + 1) below is done because each reader
 	// (except the first) only starts at a newline.  If the reader
@@ -417,16 +423,25 @@ file_reader(struct worker *work)
 		find_words(s, e, rn);
 	} while (1);
 
+#ifdef FILE_READER_TIMES
 	clock_gettime(CLOCK_MONOTONIC, t2);
-//	print_time_taken("Find Words", t1, t2);
+	print_time_taken("Find Words", t1, t2);
+#endif
 	atomic_fetch_add(&readers_done, 1);
 } // file_reader
+
+//#define HASH_TABLE_TIMES
 
 uint64_t
 process_words()
 {
 	uint64_t spins = 0;
 	uint32_t cf[26] __attribute__ ((aligned(64))) = {0};
+
+#ifdef HASH_TABLE_TIMES
+	struct timespec t1[1], t2[1];
+	clock_gettime(CLOCK_MONOTONIC, t1);
+#endif
 
 	// We do hash_init() and frq_init() here after the reader threads
 	// start. This speeds up application load time as the OS needs to
@@ -464,6 +479,11 @@ process_words()
 			key &= key - 1;
 		}
 	}
+
+#ifdef HASH_TABLE_TIMES
+	clock_gettime(CLOCK_MONOTONIC, t2);
+	print_time_taken("Hash Insert", t1, t2);
+#endif
 
 	// All readers are done.  Collate character frequency stats
 	frq_init();
