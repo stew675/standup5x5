@@ -242,11 +242,7 @@ print_bits(char *label, uint64_t v)
 
 // ********************* FILE READER ********************
 
-#ifdef __AVX2__
 #define READ_CHUNK        65536		// Appears to be optimum
-#else
-#define READ_CHUNK        10240		// Appears to be optimum
-#endif
 
 void
 find_words(char *s, char *e, uint32_t rn)
