@@ -250,6 +250,7 @@ find_words(char *s, char *e, uint32_t rn)
 	char a = 'a', z = 'z';
 	char *fives[READ_CHUNK / 5];
 	char **fivep = fives;
+	int64_t msbset = 0x8000000000000000;
 
 #ifdef __AVX2__
 	// AVX512 is about 10% faster than AVX2 for processing the words
@@ -305,14 +306,11 @@ find_words(char *s, char *e, uint32_t rn)
 			continue;
 		}
 
-		// Calculate where to start the next loop pass
-		int nextpos = 64 - __builtin_clzll(wmask);
-
-		// Invalidate everything after the last non-lower-case. We use
-		// (nextpos - 1) here because consider where wmask has the top
-		// bit set. A 64-bit value << 64 is a no-op, so the value does
-		// not change.  So we do the -1 since the MSB is set anyway
-		wmask |= ~(0ULL) << (nextpos - 1);
+		// Calculate where to start the next loop pass and invalidate
+		// everything after the last non-lower case letter
+		int nextload = __builtin_clzll(wmask);
+		wmask |= (msbset >> nextload);
+		nextload = 64 - nextload;
 
 		// Get the 1's complement of wmask. ocwm will have a 1-bit set
 		// for every valid lower-case letter than was in the vector.
@@ -342,7 +340,7 @@ find_words(char *s, char *e, uint32_t rn)
 			// Unset the lowest bit
 			wmask &= (wmask - 1);
 		}
-		s += nextpos;
+		s += nextload;
 	}
 	e += 64;
 #endif
