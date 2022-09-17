@@ -251,6 +251,7 @@ find_words(char *s, char *e, uint32_t rn)
 	char a = 'a', z = 'z';
 	char *fives[READ_CHUNK / 5];
 	char **fivep = fives;
+	int64_t msbset = 0x8000000000000000;
 
 #ifdef __AVX2__
 	// AVX512 is about 10% faster than AVX2 for processing the words
@@ -299,33 +300,29 @@ find_words(char *s, char *e, uint32_t rn)
 		// Handle lines over 64 characters in length.  Jump ahead just
 		// far enough such that we won't accidentally feed the last 5
 		// characters from an overly long line into the next pass
-		// !nmask is never true for words_alpha.txt, so the CPU branch
+		// !wmask is never true for words_alpha.txt, so the CPU branch
 		// predictor should never get this wrong
 		if (!wmask) {
 			s += 58;
 			continue;
 		}
 
-		// Calculate where to start the next loop pass
-		int nextpos = 64 - __builtin_clzll(wmask);
+		// Calculate where to start the next loop pass and invalidate
+		// everything after the last non-lower case letter
+		int nextload = __builtin_clzll(wmask);
+		wmask |= (msbset >> nextload);
+		nextload = 64 - nextload;
 
-		// Invalidate everything after the last non-lower-case. We use
-		// (nextpos - 1) here because consider where wmask has the top
-		// bit set. A 64-bit value << 64 is a no-op, so the value does
-		// not change.  So we do the -1 since the MSB is set anyway
-		wmask |= ~(0ULL) << (nextpos - 1);
-
-		// Get 1's complement of wmask
+		// Get the 1's complement of wmask. ocwm will have a 1-bit set
+		// for every valid lower-case letter than was in the vector.
 		uint64_t ocwm = ~wmask;
 
-		// Isolate all words of 5 characters or less
-		uint64_t five_or_less = ocwm & (wmask >> 5) & ((wmask << 1) | 1);
-
-		// Prune words with less than 5 characters
+		// Reset bit 0 in all words with less than 5 characters
 		ocwm = ((ocwm >> 1) & (ocwm >> 2));
+		ocwm &= (ocwm >> 2);
 
-		// Intersect five_or_less with not_less_than_five
-		wmask = ocwm & (ocwm >> 2) & five_or_less;
+		// Intersect with the isolation of all words of <=5 characters
+		wmask = ocwm & (wmask >> 5) & ((wmask << 1) | 1);
 
 		// wmask will now contain a 1 bit located at the
 		// start of every word with exactly 5 letters
@@ -344,7 +341,7 @@ find_words(char *s, char *e, uint32_t rn)
 			// Unset the lowest bit
 			wmask &= (wmask - 1);
 		}
-		s += nextpos;
+		s += nextload;
 	}
 	e += 64;
 #endif
