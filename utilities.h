@@ -15,17 +15,19 @@ static struct worker {
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
 // Set Pointers (24 bytes in size)
-struct tier {
-	uint32_t	*s;	// Pointer to set
+static struct tier {
+	// Pointer to set
+	uint32_t	*s __attribute__ ((aligned(32)));
 	uint32_t	l;	// Length of set
 	uint32_t	toff1;	// Tiered Offset 1
 	uint32_t	toff2;	// Tiered Offset 2
 	uint32_t	toff3;	// Tiered Offset 3
-};
+} tiers[26][16] __attribute__ ((aligned(64)));
 
 // Character frequency recording
 static struct frequency {
-	uint32_t	m;		// Mask (1 << (c - 'a'))
+	// Mask (1 << (c - 'a'))
+	uint32_t	m	__attribute__ ((aligned(64)));
 	int32_t		f;		// Frequency
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
@@ -35,12 +37,7 @@ static struct frequency {
 	uint32_t	tm6;		// Tiered Mask 6
 	int		ready_to_setup;	//
 	int		b;
-
-	// Position within a set
-	atomic_int	pos __attribute__((aligned(64)));
-
-	// Tier Sets (384 bytes)
-	struct tier	sets[16] __attribute__((aligned(64)));
+	struct tier	*sets;
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -52,6 +49,8 @@ atomic_int	setups_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	readers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	solvers_done	__attribute__ ((aligned(64))) = 0;
 atomic_int	first_rdr_done	__attribute__ ((aligned(64))) = 0;
+atomic_int	set0pos		__attribute__ ((aligned(64))) = 0;
+atomic_int	set1pos		__attribute__ ((aligned(64))) = 0;
 
 // Put volatile thread sync variables on their own CPU cache line
 static volatile int	workers_start	__attribute__ ((aligned(64))) = 0;
@@ -99,9 +98,12 @@ static void
 frq_init()
 {
 	memset(frq, 0, sizeof(frq));
+//	memset(tiers, 0, sizeof(tiers));
 
-	for (int b = 0; b < 26; b++)
+	for (int b = 0; b < 26; b++) {
+		frq[b].sets = tiers[b];
 		frq[b].m = (1UL << b);	// The bit mask
+	}
 } // frq_init
 
 //********************* UTILITY FUNCTIONS **********************
@@ -744,7 +746,6 @@ setup_tkeys(struct frequency *f)
 static void
 set_tier_offsets(struct frequency *f)
 {
-	struct tier *t = f->sets;
 	uint32_t key, mask, len;
 	uint32_t *ks, *kp;
 
@@ -753,6 +754,7 @@ set_tier_offsets(struct frequency *f)
 		asm("nop");
 
 	// "poison" NUM_POISON ending values with all bits set
+	struct tier *t = f->sets;
 	ks = t->s + t->l;
 	for (int p = NUM_POISON; p--; )
 		*ks++ = (uint32_t)(~0);
@@ -967,7 +969,7 @@ main(int argc, char *argv[])
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t4);
 
-	emit_solutions();
+//	emit_solutions();
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t5);
 

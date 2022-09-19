@@ -103,13 +103,13 @@ solve_work()
 
 	// Solve starting with least frequent set
 	t = f->sets;
-	while ((pos = atomic_fetch_add(&f->pos, 1)) < t->l)
+	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
 		find_solutions(1, f + 1, 0, 0, solution, t->s[pos]);
 
 	// Solve after skipping least frequent set
 	f++;
 	t = f->sets;
-	while ((pos = atomic_fetch_add(&f->pos, 1)) < t->l)
+	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
 		find_solutions(1, f + 1, 0, 1, solution, t->s[pos]);
 
 	atomic_fetch_add(&solvers_done, 1);
