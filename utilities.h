@@ -308,20 +308,23 @@ find_words(char *s, char *e, uint32_t rn)
 
 		// Calculate where to start the next loop pass and invalidate
 		// everything after the last non-lower case letter
-		int nextload = __builtin_clzll(wmask);
-		wmask |= (msbset >> nextload);
-		nextload = 64 - nextload;
+		char *ns = s + 64;
+		uint32_t nlz = __builtin_clzll(wmask);
+		ns -= nlz;
+		wmask |= (msbset >> nlz);
 
 		// Get the 1's complement of wmask. ocwm will have a 1-bit set
 		// for every valid lower-case letter than was in the vector.
 		uint64_t ocwm = ~wmask;
 
+		// Isolate all words of <=5 characters
+		wmask = (wmask >> 5) & ((wmask << 1) | 1);
+
 		// Reset bit 0 in all words with less than 5 characters
 		ocwm = ((ocwm >> 1) & (ocwm >> 2));
-		ocwm &= (ocwm >> 2);
 
-		// Intersect with the isolation of all words of <=5 characters
-		wmask = ocwm & (wmask >> 5) & ((wmask << 1) | 1);
+		// Intersect the two
+		wmask &= (ocwm & (ocwm >> 2));
 
 		// wmask will now contain a 1 bit located at the
 		// start of every word with exactly 5 letters
@@ -340,7 +343,7 @@ find_words(char *s, char *e, uint32_t rn)
 			// Unset the lowest bit
 			wmask &= (wmask - 1);
 		}
-		s += nextload;
+		s = ns;
 	}
 	e += 64;
 #endif
