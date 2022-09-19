@@ -4,7 +4,7 @@
 #define MAX_SOLUTIONS       8192
 #define MAX_WORDS           8192
 #define MAX_THREADS           16
-#define MAX_READERS            8	// Virtual systems don't like too many readers
+#define MAX_READERS            8	// No more than 8 ever needed
 
 static const char	*solution_filename = "solutions.txt";
 
@@ -14,7 +14,7 @@ static struct worker {
 	char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
-// Set Pointers (24 bytes in size)
+// Set Pointers (32 bytes in size)
 static struct tier {
 	// Pointer to set
 	uint32_t	*s __attribute__ ((aligned(32)));
@@ -35,8 +35,8 @@ static struct frequency {
 	uint32_t	tm4;		// Tiered Mask 4
 	uint32_t	tm5;		// Tiered Mask 5
 	uint32_t	tm6;		// Tiered Mask 6
-	int		ready_to_setup;	//
-	int		b;
+	int		ready;		// Ready to set up
+	int		b;		// char - 'a'
 	struct tier	*sets;
 } frq[26] __attribute__ ((aligned(64)));
 
@@ -57,7 +57,7 @@ static volatile int	workers_start	__attribute__ ((aligned(64))) = 0;
 static volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
 static volatile int	num_readers	__attribute__ ((aligned(64))) = 0;
 
-// Put general global variables on their own CPU cache line
+// Put all general global variables together on their own CPU cache line
 static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
 static uint32_t hash_collisions = 0;
 static int	write_metrics = 0;
@@ -750,7 +750,7 @@ set_tier_offsets(struct frequency *f)
 	uint32_t *ks, *kp;
 
 	// Wait here until all data is ready
-	while (!f->ready_to_setup)
+	while (!f->ready)
 		asm("nop");
 
 	// "poison" NUM_POISON ending values with all bits set
@@ -888,7 +888,7 @@ setup_frequency_sets()
 
 		// Instruct any waiting worker thread to start setup
 		// but we have to do it ourselves if single threaded
-		f->ready_to_setup = 1;
+		f->ready = 1;
 		if (nthreads == 1)
 			set_tier_offsets(f);
 	}
