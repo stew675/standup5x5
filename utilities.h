@@ -762,12 +762,12 @@ set_tier_offsets(struct frequency *f)
 		goto set_tier_offsets_done;
 
 	// "uaeios" are the best static defaults
-	f->tm1 = 1 << ('u' - 'a');
-	f->tm2 = 1 << ('a' - 'a');
-	f->tm3 = 1 << ('e' - 'a');
-	f->tm4 = 1 << ('i' - 'a');
-	f->tm5 = 1 << ('o' - 'a');
-	f->tm6 = 1 << ('s' - 'a');
+	f->tm6 = 1 << ('i' - 'a');
+	f->tm5 = 1 << ('u' - 'a');
+	f->tm4 = 1 << ('e' - 'a');
+	f->tm3 = 1 << ('a' - 'a');
+	f->tm2 = 1 << ('o' - 'a');
+	f->tm1 = 1 << ('s' - 'a');
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
