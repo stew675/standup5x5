@@ -22,6 +22,7 @@ static struct tier {
 	uint32_t	toff1;	// Tiered Offset 1
 	uint32_t	toff2;	// Tiered Offset 2
 	uint32_t	toff3;	// Tiered Offset 3
+	uint32_t	tlen3;	// Length of toff3
 } tiers[26][16] __attribute__ ((aligned(64)));
 
 // Character frequency recording
@@ -669,6 +670,21 @@ by_frequency_hi(const void *a, const void *b)
 // The !! means we end up with only 0 or 1
 #define CALCULATE_SET_AND_END						\
 	do {								\
+		int tnum = !!(mask & f->tm1) +				\
+			  (!!(mask & f->tm2) << 1) +			\
+			  (!!(mask & f->tm3) << 2) +			\
+			  (!!(mask & f->tm4) << 3);			\
+		int mf = !!(mask & f->tm5);				\
+		int ms = !!(mask & f->tm6);				\
+		struct tier *t = f->sets + tnum;			\
+		int off = t->toff3 + (!ms * t->tlen3);			\
+		end = t->s + off;					\
+		ms &= !mf;						\
+		set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);	\
+	} while (0)
+
+#if 0
+	do {								\
 		struct tier *t = f->sets + !!(mask & f->tm1) +		\
 					(!!(mask & f->tm2) << 1) +	\
 					(!!(mask & f->tm3) << 2) +	\
@@ -679,6 +695,7 @@ by_frequency_hi(const void *a, const void *b)
 		ms &= !mf;						\
 		set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);	\
 	} while (0)
+#endif
 
 void
 setup_tkeys(struct frequency *f)
@@ -735,6 +752,7 @@ setup_tkeys(struct frequency *f)
 		while (len--)
 			kp += !((*kp = *ks++) & mask);
 		ts->l = kp - ts->s;
+		ts->tlen3 = ts->l - ts->toff3;
 
 		for (uint32_t p = NUM_POISON; p--; )
 			*kp++ = (uint32_t)(~0);
@@ -969,7 +987,7 @@ main(int argc, char *argv[])
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t4);
 
-//	emit_solutions();
+	emit_solutions();
 
 	if (write_metrics) clock_gettime(CLOCK_MONOTONIC, t5);
 
