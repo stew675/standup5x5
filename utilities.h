@@ -674,14 +674,14 @@ by_frequency_hi(const void *a, const void *b)
 				(!!(mask & f->tm2) << 1) +		\
 				(!!(mask & f->tm3) << 2) +		\
 				(!!(mask & f->tm4) << 3); 		\
-		struct tier *t = f->sets + tnum;			\
 		uint32_t mf = !!(mask & f->tm5);			\
-		uint32_t ms = !!(mask & f->tm6);			\
-		uint32_t off = t->toff3 + (!ms * t->tlen3);		\
-		ms &= !mf;						\
-		mf &= !ms;						\
+		uint32_t ms = !(mask & f->tm6);				\
+		struct tier *t = f->sets + tnum;			\
+		uint32_t off = t->toff3 + (ms * t->tlen3);		\
+		ms |= mf;						\
+		mf &= ms;						\
 		end = t->s + off;					\
-		set = t->s + (mf * t->toff2) + (ms * t->toff1);		\
+		set = t->s + (mf * t->toff2) + (!ms * t->toff1);	\
 	} while (0)
 
 #if 0
