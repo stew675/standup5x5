@@ -670,17 +670,18 @@ by_frequency_hi(const void *a, const void *b)
 // The !! means we end up with only 0 or 1
 #define CALCULATE_SET_AND_END						\
 	do {								\
-		int tnum = !!(mask & f->tm1) +				\
-			  (!!(mask & f->tm2) << 1) +			\
-			  (!!(mask & f->tm3) << 2) +			\
-			  (!!(mask & f->tm4) << 3);			\
-		int mf = !!(mask & f->tm5);				\
-		int ms = !!(mask & f->tm6);				\
+		uint32_t tnum = !!(mask & f->tm1) +			\
+				(!!(mask & f->tm2) << 1) +		\
+				(!!(mask & f->tm3) << 2) +		\
+				(!!(mask & f->tm4) << 3); 		\
 		struct tier *t = f->sets + tnum;			\
-		int off = t->toff3 + (!ms * t->tlen3);			\
-		end = t->s + off;					\
+		uint32_t mf = !!(mask & f->tm5);			\
+		uint32_t ms = !!(mask & f->tm6);			\
+		uint32_t off = t->toff3 + (!ms * t->tlen3);		\
 		ms &= !mf;						\
-		set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);	\
+		mf &= !ms;						\
+		end = t->s + off;					\
+		set = t->s + (mf * t->toff2) + (ms * t->toff1);		\
 	} while (0)
 
 #if 0
