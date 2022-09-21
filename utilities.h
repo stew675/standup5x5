@@ -61,6 +61,7 @@ static volatile int	num_readers	__attribute__ ((aligned(64))) = 0;
 // Put all general global variables together on their own CPU cache line
 static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
 static uint32_t hash_collisions = 0;
+static uint32_t	tm_mask = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
@@ -666,6 +667,42 @@ by_frequency_hi(const void *a, const void *b)
 } // by_frequency_hi
 
 
+#ifdef __BMI2__
+
+// "aeious" are the best static defaults.  These must be
+// in alphabetical order for _pext_u32() to work properly
+uint32_t tm1 = 1 << ('a' - 'a');
+uint32_t tm2 = 1 << ('e' - 'a');
+uint32_t tm3 = 1 << ('i' - 'a');
+uint32_t tm4 = 1 << ('o' - 'a');
+uint32_t tm5 = 1 << ('s' - 'a');
+uint32_t tm6 = 1 << ('u' - 'a');
+
+// The sequence of instructions here is intended.  It achieves good
+// concurrency in the CPU by engaging both the ALU and AGU, which
+// is why f->tm5/tm6 is faster than using the global variables
+#define CALCULATE_SET_AND_END						\
+	do {								\
+		struct tier *t = f->sets + _pext_u32(mask, tm_mask);	\
+		uint32_t mf = !!(mask & f->tm5);			\
+		uint32_t ms = !(mask & f->tm6);				\
+		uint32_t off = t->toff3 + (ms * t->tlen3);		\
+		uint32_t mx = !(ms | mf);				\
+		end = t->s + off;					\
+		set = t->s + (mf * t->toff2) + (mx * t->toff1);		\
+	} while (0)
+
+#else
+
+// "uaeios" is the best static default order in
+// the absence of the _pext_u32() intrinsic
+uint32_t tm1 = 1 << ('u' - 'a');
+uint32_t tm2 = 1 << ('a' - 'a');
+uint32_t tm3 = 1 << ('e' - 'a');
+uint32_t tm4 = 1 << ('i' - 'a');
+uint32_t tm5 = 1 << ('o' - 'a');
+uint32_t tm6 = 1 << ('s' - 'a');
+
 // Determine the values for set and end in a branchless manner
 // The !! means we end up with only 0 or 1
 #define CALCULATE_SET_AND_END						\
@@ -677,32 +714,18 @@ by_frequency_hi(const void *a, const void *b)
 		uint32_t mf = !!(mask & f->tm5);			\
 		uint32_t ms = !(mask & f->tm6);				\
 		struct tier *t = f->sets + tnum;			\
+		uint32_t mx = !(ms | mf);				\
 		uint32_t off = t->toff3 + (ms * t->tlen3);		\
-		ms = !(ms | mf);					\
 		end = t->s + off;					\
-		set = t->s + (mf * t->toff2) + (ms * t->toff1);		\
+		set = t->s + (mf * t->toff2) + (mx * t->toff1);		\
 	} while (0)
 
-#if 0
-	do {								\
-		struct tier *t = f->sets + !!(mask & f->tm1) +		\
-					(!!(mask & f->tm2) << 1) +	\
-					(!!(mask & f->tm3) << 2) +	\
-					(!!(mask & f->tm4) << 3);	\
-		int mf = !!(mask & f->tm5);				\
-		int ms = !!(mask & f->tm6);				\
-		end = t->s + (ms * t->toff3) + (!ms * t->l);		\
-		ms &= !mf;						\
-		set = t->s + ((mf & !ms) * t->toff2) + (ms * t->toff1);	\
-	} while (0)
 #endif
 
 void
 setup_tkeys(struct frequency *f)
 {
 	struct tier	*t0 = f->sets;
-	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
-	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
 	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
 	uint32_t	*ks, len;
 	uint32_t	masks[16];
@@ -781,13 +804,14 @@ set_tier_offsets(struct frequency *f)
 	if (f == frq)
 		goto set_tier_offsets_done;
 
-	// "uaeios" are the best static defaults
-	f->tm1 = 1 << ('u' - 'a');
-	f->tm2 = 1 << ('a' - 'a');
-	f->tm3 = 1 << ('e' - 'a');
-	f->tm4 = 1 << ('i' - 'a');
-	f->tm5 = 1 << ('o' - 'a');
-	f->tm6 = 1 << ('s' - 'a');
+	// "aeious" are the best static defaults
+	// These must be in alphabetical order
+	f->tm1 = tm1;
+	f->tm2 = tm2;
+	f->tm3 = tm3;
+	f->tm4 = tm4;
+	f->tm5 = tm5;
+	f->tm6 = tm6;
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
@@ -931,6 +955,7 @@ main(int argc, char *argv[])
 	// Copy in the default file-name
 	strcpy(file, "words_alpha.txt");
 
+	tm_mask = (tm1 | tm2 | tm3 | tm4);
 	nthreads = get_nthreads();
 
 	if (argc > 1) {
