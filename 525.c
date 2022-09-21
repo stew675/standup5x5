@@ -37,7 +37,7 @@ add_solution(uint32_t *solution)
 
 	for (i = 1; i < 6; i++) {
 		wd = hash_lookup(solution[i], words);
-		assert(wd != NULL);
+//		assert(wd != NULL);
 
 		*so++ = *wd++; *so++ = *wd++; *so++ = *wd++; *so++ = *wd++;
 		*so++ = *wd; *so++ = (i < 5) ? '\t' : '\n';

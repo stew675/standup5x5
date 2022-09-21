@@ -681,9 +681,9 @@ by_frequency_hi(const void *a, const void *b)
 				     (!!(mask & f->tm4) << 3)
 #endif
 
-// The sequence of instructions here is intended.  It achieves good
-// concurrency in the CPU by engaging both the ALU and AGU, which
-// is why f->tm5/tm6/tmm is faster than if using global variables
+// The sequence of instructions here is intended.  It achieves good concurrency
+// in the CPU by engaging both the ALU and AGU, which appears to be why f->tm5
+// tm6/tmm is faster than if using global variables or #defines
 
 #define CALCULATE_SET_AND_END					\
 	do {							\
@@ -718,7 +718,6 @@ setup_tkeys(struct frequency *f)
 		tmm &= tmm - 1;
 		tm4 = 1 << __builtin_ctz(tmm);
 		tmm &= tmm - 1;
-		assert(tmm == 0);
 	} while (0);
 #endif
 
