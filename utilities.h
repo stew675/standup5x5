@@ -668,61 +668,59 @@ by_frequency_hi(const void *a, const void *b)
 
 
 #ifdef __BMI2__
+#define _USE_PEXT_U32_
+#endif
+
+
+#ifdef _USE_PEXT_U32_
+#define GET_TIER struct tier *t = f->sets + _pext_u32(mask, f->tmm)
+#else
+#define GET_TIER struct tier *t = f->sets + !!(mask & f->tm1) +	\
+				     (!!(mask & f->tm2) << 1) +	\
+				     (!!(mask & f->tm3) << 2) +	\
+				     (!!(mask & f->tm4) << 3)
+#endif
 
 // The sequence of instructions here is intended.  It achieves good
 // concurrency in the CPU by engaging both the ALU and AGU, which
 // is why f->tm5/tm6/tmm is faster than if using global variables
-#define CALCULATE_SET_AND_END						\
-	do {								\
-		struct tier *t = f->sets + _pext_u32(mask, f->tmm);	\
-		uint32_t mf = !!(mask & f->tm5);			\
-		uint32_t ms = !(mask & f->tm6);				\
-		uint32_t off = t->toff3 + (ms * t->tlen3);		\
-		uint32_t mx = !(ms | mf);				\
-		end = t->s + off;					\
-		set = t->s + (mf * t->toff2) + (mx * t->toff1);		\
+
+#define CALCULATE_SET_AND_END					\
+	do {							\
+		GET_TIER;					\
+		uint32_t mf = !!(mask & f->tm5);		\
+		uint32_t ms = !(mask & f->tm6);			\
+		uint32_t off = t->toff3 + (ms * t->tlen3);	\
+		uint32_t mx = !(ms | mf) * t->toff1;		\
+		end = t->s + off;				\
+		set = t->s + mx + (mf * t->toff2);		\
 	} while (0)
-
-#else
-
-// Determine the values for set and end in a branchless manner
-// The !! means we end up with only 0 or 1
-#define CALCULATE_SET_AND_END						\
-	do {								\
-		uint32_t tnum = !!(mask & f->tm1) +			\
-				(!!(mask & f->tm2) << 1) +		\
-				(!!(mask & f->tm3) << 2) +		\
-				(!!(mask & f->tm4) << 3); 		\
-		uint32_t mf = !!(mask & f->tm5);			\
-		uint32_t ms = !(mask & f->tm6);				\
-		struct tier *t = f->sets + tnum;			\
-		uint32_t mx = !(ms | mf);				\
-		uint32_t off = t->toff3 + (ms * t->tlen3);		\
-		end = t->s + off;					\
-		set = t->s + (mf * t->toff2) + (mx * t->toff1);		\
-	} while (0)
-
-#endif
 
 void
 setup_tkeys(struct frequency *f)
 {
 	struct tier	*t0 = f->sets;
 	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
-	uint32_t	tm1, tm2, tm3, tm4, tmm = f->tmm;
+	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
+	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
 	uint32_t	*ks, len;
 	uint32_t	masks[16];
 
-	// We need to use the order that _pext_u32() will use
-	tm1 = 1 << __builtin_ctz(tmm);
-	tmm &= tmm - 1;
-	tm2 = 1 << __builtin_ctz(tmm);
-	tmm &= tmm - 1;
-	tm3 = 1 << __builtin_ctz(tmm);
-	tmm &= tmm - 1;
-	tm4 = 1 << __builtin_ctz(tmm);
-	tmm &= tmm - 1;
-	assert(tmm == 0);
+#ifdef _USE_PEXT_U32_
+	do {
+		// We need to use the order that _pext_u32() will use
+		uint32_t tmm = f->tmm;
+		tm1 = 1 << __builtin_ctz(tmm);
+		tmm &= tmm - 1;
+		tm2 = 1 << __builtin_ctz(tmm);
+		tmm &= tmm - 1;
+		tm3 = 1 << __builtin_ctz(tmm);
+		tmm &= tmm - 1;
+		tm4 = 1 << __builtin_ctz(tmm);
+		tmm &= tmm - 1;
+		assert(tmm == 0);
+	} while (0);
+#endif
 
 	// Define the mask bitmaps for splitting the sets
 	masks[0]  = 0;
