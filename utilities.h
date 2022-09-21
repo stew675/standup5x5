@@ -678,10 +678,9 @@ by_frequency_hi(const void *a, const void *b)
 		uint32_t ms = !(mask & f->tm6);				\
 		struct tier *t = f->sets + tnum;			\
 		uint32_t off = t->toff3 + (ms * t->tlen3);		\
-		ms |= mf;						\
-		mf &= ms;						\
+		ms = !(ms | mf);					\
 		end = t->s + off;					\
-		set = t->s + (mf * t->toff2) + (!ms * t->toff1);	\
+		set = t->s + (mf * t->toff2) + (ms * t->toff1);		\
 	} while (0)
 
 #if 0
@@ -831,6 +830,7 @@ set_tier_offsets(struct frequency *f)
 			*kp++ = key;
 		}
 	t->toff3 = kp - t->s;
+	t->tlen3 = t->l - t->toff3;
 
 	setup_tkeys(f);
 
