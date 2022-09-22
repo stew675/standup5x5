@@ -78,36 +78,28 @@ create_sets()
 
 
 // ********************* SOLUTION FUNCTIONS ********************
-static inline void
-add_solution_real(uint32_t *solution)
-{
-	int i, pos = atomic_fetch_add(&num_sol, 1);
-	char *so = solutions + pos * 30;
-	const char *wd;
-
-	for (i = 1; i < 6; i++) {
-		wd = hash_lookup(solution[i], words);
-		//assert(wd != NULL);
-
-		*so++ = *wd++; *so++ = *wd++; *so++ = *wd++; *so++ = *wd++;
-		*so++ = *wd; *so++ = (i < 5) ? '\t' : '\n';
-	}
-} // add_solution_real
-
-static inline void
+static void
 add_solution(uint32_t key0, uint32_t key1, uint32_t key2, uint32_t key3, uint32_t key4)
 {
-	uint32_t solution[6];
+	char *so = solutions + (atomic_fetch_add(&num_sol, 1) << 5);
 
-	solution[1] = key0;
-	solution[2] = key1;
-	solution[3] = key2;
-	solution[4] = key3;
-	solution[5] = key4;
-	add_solution_real(solution);
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(key0);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(key1);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(key2);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(key3);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(key4);
+	so[5] = ' '; so[6] = ' '; so[7] = '\n';
 } // add_solution
 
- 
+
 #define FOUR_READY  ((uint32_t)0xEAD1EAD1)
 
 atomic_int num_four = 0;

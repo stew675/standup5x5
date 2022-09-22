@@ -67,7 +67,7 @@ static int	nthreads = 0;
 static int	nkeys = 0;
 
 // We build the solutions directly as a character array to write out when done
-static char     solutions[MAX_SOLUTIONS * 30] __attribute__ ((aligned(64)));
+static char     solutions[MAX_SOLUTIONS * 32] __attribute__ ((aligned(64)));
 
 // Allow for up to 3x the number of unique non-anagram words
 static char     words[MAX_WORDS * 24] __attribute__ ((aligned(64)));
@@ -100,7 +100,6 @@ static void
 frq_init()
 {
 	memset(frq, 0, sizeof(frq));
-//	memset(tiers, 0, sizeof(tiers));
 
 	for (int b = 0; b < 26; b++) {
 		frq[b].sets = tiers[b];
@@ -201,7 +200,7 @@ hash_insert(uint32_t key, uint32_t pos)
 } // hash_insert
 
 const char *
-hash_lookup(uint32_t key, const char *wp)
+hash_lookup(uint32_t key)
 {
 	uint32_t col = 0, hashpos = key_hash(key);
 
@@ -224,7 +223,7 @@ hash_lookup(uint32_t key, const char *wp)
 
 	hash_collisions += col;
 
-	return wp + posmap[hashpos];
+	return words + posmap[hashpos];
 } // hash_lookup
 #undef key_hash
 
@@ -622,7 +621,7 @@ read_words(char *path)
 void
 emit_solutions()
 {
-	ssize_t len = num_sol * 30, written = 0;
+	ssize_t len = num_sol << 5, written = 0;
 
 	int solution_fd;
 	if ((solution_fd = open(solution_filename, O_WRONLY | O_CREAT, 0644)) < 0) {

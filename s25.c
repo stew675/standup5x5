@@ -25,30 +25,35 @@
 // ********************* SOLUTION FUNCTIONS ********************
 
 static void
-add_solution(uint32_t *solution)
+add_solution(uint32_t *sp)
 {
-	int i, pos = atomic_fetch_add(&num_sol, 1);
-	char *so = solutions + pos * 30;
-	const char *wd;
+	char *so = solutions + (atomic_fetch_add(&num_sol, 1) << 5);
 
-	for (i = 1; i < 6; i++) {
-		wd = hash_lookup(solution[i], words);
-//		assert(wd != NULL);
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
 
-		*so++ = *wd++; *so++ = *wd++; *so++ = *wd++; *so++ = *wd++;
-		*so++ = *wd; *so++ = (i < 5) ? '\t' : '\n';
-	}
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp);
+	so[5] = ' '; so[6] = ' '; so[7] = '\n';
 } // add_solution
 
 // Since find_solutions() is the busiest function we keep the loops
 // within it as small and tight as possible for the most speed
 void
-find_solutions(int depth, struct frequency *f, uint32_t *solution,
+find_solutions(int depth, struct frequency *f, uint32_t *sp,
 		uint32_t mask, uint32_t key, int skipped)
 {
-	solution[depth] = key;
+	*sp++ = key;
 	if (depth == 5)
-		return add_solution(solution);
+		return add_solution(sp - 5);
 	mask |= key;
 
 	struct frequency *e = frq + (min_search_depth + depth);
@@ -64,7 +69,7 @@ find_solutions(int depth, struct frequency *f, uint32_t *solution,
 			kp += !((*kp = *set++) & mask);
 
 		for (*kp = 0, kp = ks; (key = *kp++); )
-			find_solutions(depth + 1, f + 1, solution, mask, key, skipped);
+			find_solutions(depth + 1, f + 1, sp, mask, key, skipped);
 
 		if (skipped)
 			return;
@@ -78,19 +83,18 @@ void
 solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
-	struct frequency *f = frq;
-	struct tier *t = f->sets;
+	struct tier *t;
 	int32_t pos;
 
 	// Solve starting with least frequent set
+	t = frq[0].sets;
 	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions(1, f + 1, solution, 0, t->s[pos], 0);
+		find_solutions(1, frq + 1, solution, 0, t->s[pos], 0);
 
 	// Solve after skipping least frequent set
-	f++;
-	t = f->sets;
+	t = frq[1].sets;
 	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_solutions(1, f + 1, solution, 0, t->s[pos], 1);
+		find_solutions(1, frq + 2, solution, 0, t->s[pos], 1);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work

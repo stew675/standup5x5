@@ -27,19 +27,24 @@
 // ********************* SOLVER ALGORITHM ********************
 
 static void
-add_solution(uint32_t *solution)
+add_solution(uint32_t *sp)
 {
-	int i, pos = atomic_fetch_add(&num_sol, 1);
-	char *so = solutions + pos * 30;
-	const char *wd;
+	char *so = solutions + (atomic_fetch_add(&num_sol, 1) << 5);
 
-	for (i = 1; i < 6; i++) {
-		wd = hash_lookup(solution[i], words);
-		//assert(wd != NULL);
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
 
-		*so++ = *wd++; *so++ = *wd++; *so++ = *wd++; *so++ = *wd++;
-		*so++ = *wd; *so++ = (i < 5) ? '\t' : '\n';
-	}
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
+	so[5] = '\t'; so += 6;
+
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp);
+	so[5] = ' '; so[6] = ' '; so[7] = '\n';
 } // add_solution
 
 
@@ -63,15 +68,16 @@ vscan(uint32_t mask, uint32_t *set, uint32_t *n)
 	return _pext_u64(0xfedcba9876543210, mask64);
 } // vscan
 
+
 // find_solutions() which is the busiest loop is kept
 // as small and tight as possible for the most speed
 void
 find_solutions(int depth, struct frequency *f, uint32_t mask,
-		int skipped, uint32_t *solution, uint32_t key)
+		int skipped, uint32_t *sp, uint32_t key)
 {
-	solution[depth] = key;
+	*sp++ = key;
 	if (depth == 5)
-		return add_solution(solution);
+		return add_solution(sp - 5);
 	mask |= key;
 
 	struct frequency *e = frq + (min_search_depth + depth);
@@ -84,7 +90,7 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 		// Find all matching keys
 		for (; set < end; set += 16)
 			for (uint64_t vresmask = vscan(mask, set, &n); n--; vresmask >>= 4)
-				find_solutions(depth + 1, f + 1, mask, skipped, solution, set[vresmask & 0xFULL]);
+				find_solutions(depth + 1, f + 1, mask, skipped, sp, set[vresmask & 0xFULL]);
 
 		if (skipped)
 			break;
@@ -96,21 +102,19 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 static void
 solve_work()
 {
-	uint32_t solution[16] __attribute__((aligned(64)));
-	struct frequency *f = frq;
+	uint32_t solution[6] __attribute__((aligned(64)));
 	struct tier *t;
 	int32_t pos;
 
 	// Solve starting with least frequent set
-	t = f->sets;
+	t = frq[0].sets;
 	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions(1, f + 1, 0, 0, solution, t->s[pos]);
+		find_solutions(1, frq + 1, 0, 0, solution, t->s[pos]);
 
 	// Solve after skipping least frequent set
-	f++;
-	t = f->sets;
+	t = frq[1].sets;
 	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_solutions(1, f + 1, 0, 1, solution, t->s[pos]);
+		find_solutions(1, frq + 2, 0, 1, solution, t->s[pos]);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
