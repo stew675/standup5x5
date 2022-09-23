@@ -56,8 +56,7 @@ find_solutions(int depth, struct frequency *f, uint32_t *sp,
 		return add_solution(sp - 5);
 	mask |= key;
 
-	struct frequency *e = frq + (min_search_depth + depth);
-	for (uint32_t *set, *end; f < e; f++) {
+	for (uint32_t *set, *end; ; f++) {
 		if (mask & f->m)
 			continue;
 

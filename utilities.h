@@ -60,8 +60,7 @@ static volatile int	go_solve	__attribute__ ((aligned(64))) = 0;
 static volatile int	num_readers	__attribute__ ((aligned(64))) = 0;
 
 // Put all general global variables together on their own CPU cache line
-static int32_t	min_search_depth __attribute__ ((aligned(64))) = 0;
-static uint32_t hash_collisions = 0;
+static uint32_t hash_collisions __attribute__ ((aligned(64))) = 0;
 static int	write_metrics = 0;
 static int	nthreads = 0;
 static int	nkeys = 0;
@@ -202,7 +201,7 @@ hash_insert(uint32_t key, uint32_t pos)
 const char *
 hash_lookup(uint32_t key)
 {
-	uint32_t col = 0, hashpos = key_hash(key);
+	uint32_t hashpos = key_hash(key);
 
 	do {
 		// Check for a match
@@ -213,15 +212,9 @@ hash_lookup(uint32_t key)
 		if (keymap[hashpos] == 0)
 			return NULL;
 
-		// Handle full hash table condition
-		if (++col == HASHSZ)
-			return NULL;
-
 		if (++hashpos == HASHSZ)
 			hashpos -= HASHSZ;
 	} while (1);
-
-	hash_collisions += col;
 
 	return words + posmap[hashpos];
 } // hash_lookup
@@ -229,6 +222,20 @@ hash_lookup(uint32_t key)
 
 // Just a handy debugging function which was used when developing the
 // 5 letter word extraction bit masking algorithm within find_words()
+void
+print_bits32(char *label, uint32_t v)
+{
+	printf("%s ", label);
+	for (int i = 0; i < 32; i++) {
+		if (v >> 31)
+			printf("1");
+		else
+			printf("0");
+		v <<= 1;
+	}
+	printf("\n");
+} // print_bits32
+
 void
 print_bits(char *label, uint64_t v)
 {
@@ -910,15 +917,13 @@ setup_frequency_sets()
 		*bp[__builtin_ctz(mk)]++ = key;
 	}
 
-	// Determine min_search_depth and start worker threads
+	// Start worker threads
 	for (int i = 0; i < 26; i++) {
 		struct frequency *f = frq + i;
 		struct tier *t = f->sets;
 
 		t->s = tkeys[i];
 		t->l = bp[i] - t->s;
-		if (t->l > 0)
-			min_search_depth = i - 3;
 
 		// Instruct any waiting worker thread to start setup
 		// but we have to do it ourselves if single threaded
