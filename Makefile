@@ -5,16 +5,13 @@
 #
 # Use gcc for consistent optimization behavior
 
-all: a25 s25 v25 525
+all: s25 v25 525
 
 CC=clang-13
 #CC=gcc
 
 CFLAGS=-O3 -march=native -Wall
 LIBS=-lpthread
-
-a25: a25.c utilities.h Makefile
-	$(CC) $(CFLAGS) -o $@ a25.c $(LIBS)
 
 s25: s25.c utilities.h Makefile
 	$(CC) $(CFLAGS) -o $@ s25.c $(LIBS)

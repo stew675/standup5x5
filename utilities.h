@@ -7,6 +7,7 @@
 #define MAX_READERS            8	// No more than 8 ever needed
 
 static const char	*solution_filename = "solutions.txt";
+static const char	*search_order = "qjxzvfwkbgpmhydcuntloirsea";
 
 // Worker thread state
 static struct worker {
@@ -18,26 +19,25 @@ static struct worker {
 static struct tier {
 	// Pointer to set
 	uint32_t	*s __attribute__ ((aligned(32)));
-	uint32_t	l;	// Length of set
-	uint32_t	toff1;	// Tiered Offset 1
-	uint32_t	toff2;	// Tiered Offset 2
-	uint32_t	toff3;	// Tiered Offset 3
-	uint32_t	tlen3;	// Length of toff3
+	uint32_t	l;		// Length of set
+	uint32_t	toff1;		// Tiered Offset 1
+	uint32_t	toff2;		// Tiered Offset 2
+	uint32_t	toff3;		// Tiered Offset 3
+	uint32_t	tlen3;		// Length of toff3
 } tiers[26][16] __attribute__ ((aligned(64)));
 
 // Character frequency recording
 static struct frequency {
 	// Mask (1 << (c - 'a'))
 	uint32_t	m	__attribute__ ((aligned(64)));
-	int32_t		f;		// Frequency
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
 	uint32_t	tm3;		// Tiered Mask 3
 	uint32_t	tm4;		// Tiered Mask 4
 	uint32_t	tm5;		// Tiered Mask 5
 	uint32_t	tm6;		// Tiered Mask 6
-	uint32_t	tmm;		// Logical OR of tm1..tm4
-	int		ready;		// Ready to set up
+	uint32_t	tmm;		// tm1 | tm2 | tm3 | tm4
+	int		ready;		// Is ready to set up
 	int		b;		// char - 'a'
 	struct tier	*sets;
 } frq[26] __attribute__ ((aligned(64)));
@@ -77,7 +77,7 @@ static uint32_t wordkeys[MAX_WORDS * 3] __attribute__ ((aligned(64)));
 // be 32-byte aligned, but we align it to 64 bytes anyway
 static	uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
 static	uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
-static	uint32_t	unmap[32] __attribute__((aligned(64)));
+static	uint32_t	remap[32] __attribute__((aligned(64)));
 
 static void solve();
 static void solve_work();
@@ -93,6 +93,14 @@ print_time_taken(char *label, struct timespec *ts, struct timespec *te)
 	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000, (time_taken % 1000000000) / 1000);
 } // print_time_taken
  
+void
+build_remap()
+{
+	for (uint32_t one = 1, i = 0; i < 26; i++)
+		remap[(search_order[i] & 0x1F)] = one << i;
+} // build_remap
+
+
 //********************* INIT FUNCTIONS **********************
 
 static void
@@ -102,7 +110,7 @@ frq_init()
 
 	for (int b = 0; b < 26; b++) {
 		frq[b].sets = tiers[b];
-		frq[b].m = (1UL << b);	// The bit mask
+		frq[b].m = remap[b];	// The bit mask
 	}
 } // frq_init
 
@@ -134,13 +142,12 @@ get_nthreads()
 static inline uint32_t
 calc_key(const char *wd)
 {
-	uint32_t one = 1, mask = 0x1F;
-	uint32_t key = (one << (wd[0] & mask)) |
-                       (one << (wd[1] & mask)) |
-                       (one << (wd[2] & mask)) |
-                       (one << (wd[3] & mask)) |
-                       (one << (wd[4] & mask));
-	return key >> 1;
+	uint32_t mask = 0x1F;
+	return  remap[wd[0] & mask] |
+		remap[wd[1] & mask] |
+		remap[wd[2] & mask] |
+		remap[wd[3] & mask] |
+		remap[wd[4] & mask];
 } // calc_key
 
 //********************* HASH TABLE FUNCTIONS **********************
@@ -445,7 +452,6 @@ uint64_t
 process_words()
 {
 	uint64_t spins = 0;
-	uint32_t cf[26] __attribute__ ((aligned(64))) = {0};
 
 #ifdef HASH_TABLE_TIMES
 	struct timespec t1[1], t2[1];
@@ -481,12 +487,6 @@ process_words()
 		*k = key;
 		k += hash_insert(key, pos);
 		pos++;
-
-		// Get character frequencies
-		while (key) {
-			cf[__builtin_ctz(key)]++;
-			key &= key - 1;
-		}
 	}
 
 #ifdef HASH_TABLE_TIMES
@@ -496,8 +496,6 @@ process_words()
 
 	// All readers are done.  Collate character frequency stats
 	frq_init();
-	for (int c = 0; c < 26; c++)
-		frq[c].f = cf[c];
 
 	return spins;
 } // process_words
@@ -665,13 +663,6 @@ emit_solutions()
 
 
 // ********************* FREQUENCY HANDLER ********************
-
-int
-by_frequency_hi(const void *a, const void *b)
-{
-	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
-} // by_frequency_hi
-
 
 #ifdef __BMI2__
 #define _USE_PEXT_U32_
@@ -861,6 +852,7 @@ set_tier_offsets_done:
 	atomic_fetch_add(&setups_done, 1);
 } // set_tier_offsets
 
+#if 0
 // Specialised frequency sort, since we only need to swap the first 8 bytes
 // of frequency sets at this point in time and each frequency set structure
 // can be many hundreds of bytes, which wastes time if qsort is used
@@ -885,6 +877,7 @@ fsort()
 		unmap[frq[i].b] = (one << i);
 	}
 } // fsort
+#endif
 
 // The role of this function is to re-arrange the key set according to all
 // words containing the least frequently used letter, and then scanning the
@@ -897,7 +890,7 @@ fsort()
 void
 setup_frequency_sets()
 {
-	fsort();
+//	fsort();
 
 	// Setup for key spray
 	uint32_t *bp[32] __attribute__((aligned(64)));
@@ -905,17 +898,8 @@ setup_frequency_sets()
 		bp[i] = tkeys[i];
 
 	// Spray keys to buckets
-	for (uint32_t *kp = keys, key; (key = *kp++); ) {
-		uint32_t mk = unmap[__builtin_ctz(key)];
-		uint32_t k = key & (key - 1);
-
-		mk |= unmap[__builtin_ctz(k)]; k &= k - 1;
-		mk |= unmap[__builtin_ctz(k)]; k &= k - 1;
-		mk |= unmap[__builtin_ctz(k)]; k &= k - 1;
-		mk |= unmap[__builtin_ctz(k)];
-
-		*bp[__builtin_ctz(mk)]++ = key;
-	}
+	for (uint32_t *kp = keys, key; (key = *kp++); )
+		*bp[__builtin_ctz(key)]++ = key;
 
 	// Start worker threads
 	for (int i = 0; i < 26; i++) {
@@ -947,6 +931,8 @@ main(int argc, char *argv[])
 	struct timespec t1[1], t2[1], t3[1], t4[1], t5[1];
 	char file[256];
 	pthread_t tid[1];
+
+	build_remap();
 
 	// Copy in the default file-name
 	strcpy(file, "words_alpha.txt");
