@@ -108,10 +108,9 @@ frq_init()
 {
 	memset(frq, 0, sizeof(frq));
 
-	for (uint32_t  one = 1, b = 0; b < 26; b++) {
+	for (uint32_t b = 0; b < 26; b++) {
 		frq[b].sets = tiers[b];
-		frq[b].m = one << (search_order[b] - 'a');	// The bit mask
-//		frq[b].b = __builtin_ctz(frq[b].m);
+		frq[b].m = remap[search_order[b] & 0x1F];	// The bit mask
 	}
 } // frq_init
 

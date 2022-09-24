@@ -74,7 +74,7 @@ find_skipped(struct frequency *f, uint32_t mask, uint32_t *sp)
 {
 	uint32_t n, *set, *end;
 
-	if (__builtin_popcount(mask) == 25)
+	if (__builtin_popcount(mask) == 26)
 		return add_solution(sp - 4);
 
 	f = frq + __builtin_ctz(~mask);
@@ -113,7 +113,7 @@ find_solutions(struct frequency *f, uint32_t mask, uint32_t *sp)
 			find_solutions(f, mask | key, sp);
 		}
 
-	find_skipped(f, mask, sp - 1);
+	find_skipped(f, mask | f->m, sp - 1);
 } // find_solutions
 
 // Thread driver
@@ -132,7 +132,7 @@ solve_work()
 	// Solve after skipping least frequent set
 	t = frq[1].sets;
 	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_skipped(frq + 1, (*solution = t->s[pos]), solution);
+		find_skipped(frq + 1, (*solution = t->s[pos]) | frq[0].m, solution);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
