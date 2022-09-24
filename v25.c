@@ -27,7 +27,7 @@
 // ********************* SOLVER ALGORITHM ********************
 
 static void
-add_solution(uint32_t *sp)
+add_solution(uint32_t *sp, uint32_t key)
 {
 	char *so = solutions + (atomic_fetch_add(&num_sol, 1) << 5);
 
@@ -43,7 +43,7 @@ add_solution(uint32_t *sp)
 	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
 	so[5] = '\t'; so += 6;
 
-	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp);
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(key);
 	so[5] = ' '; so[6] = ' '; so[7] = '\n';
 } // add_solution
 
@@ -72,12 +72,12 @@ vscan(uint32_t mask, uint32_t *set, uint32_t *n)
 // find_solutions() which is the busiest loop is kept
 // as small and tight as possible for the most speed
 void
-find_solutions(int depth, struct frequency *f, uint32_t mask,
-		int skipped, uint32_t *sp, uint32_t key)
+find_solutions(struct frequency *f, uint32_t mask, int skipped, uint32_t *sp, uint32_t key)
 {
+	if (__builtin_popcount(mask) & 0x10)
+		return add_solution(sp - 4, key);
+
 	*sp++ = key;
-	if (depth == 5)
-		return add_solution(sp - 5);
 	mask |= key;
 
 	for (uint32_t n, *set, *end; ; f++) {
@@ -88,7 +88,7 @@ find_solutions(int depth, struct frequency *f, uint32_t mask,
 		// Find all matching keys
 		for (; set < end; set += 16)
 			for (uint64_t vresmask = vscan(mask, set, &n); n--; vresmask >>= 4)
-				find_solutions(depth + 1, f + 1, mask, skipped, sp, set[vresmask & 0xFULL]);
+				find_solutions(f + 1, mask, skipped, sp, set[vresmask & 0xFULL]);
 
 		if (skipped)
 			return;
@@ -107,12 +107,12 @@ solve_work()
 	// Solve starting with least frequent set
 	t = frq[0].sets;
 	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions(1, frq + 1, 0, 0, solution, t->s[pos]);
+		find_solutions(frq + 1, 0, 0, solution, t->s[pos]);
 
 	// Solve after skipping least frequent set
 	t = frq[1].sets;
 	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_solutions(1, frq + 2, 0, 1, solution, t->s[pos]);
+		find_solutions(frq + 2, 0, 1, solution, t->s[pos]);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
