@@ -38,7 +38,7 @@ static struct frequency {
 	uint32_t	tm6;		// Tiered Mask 6
 	uint32_t	tmm;		// tm1 | tm2 | tm3 | tm4
 	int		ready;		// Is ready to set up
-	int		b;		// char - 'a'
+//	int		b;		// char - 'a'
 	struct tier	*sets;
 } frq[26] __attribute__ ((aligned(64)));
 
@@ -108,9 +108,10 @@ frq_init()
 {
 	memset(frq, 0, sizeof(frq));
 
-	for (int b = 0; b < 26; b++) {
+	for (uint32_t  one = 1, b = 0; b < 26; b++) {
 		frq[b].sets = tiers[b];
-		frq[b].m = remap[b];	// The bit mask
+		frq[b].m = one << (search_order[b] - 'a');	// The bit mask
+//		frq[b].b = __builtin_ctz(frq[b].m);
 	}
 } // frq_init
 
@@ -794,12 +795,12 @@ set_tier_offsets(struct frequency *f)
 		goto set_tier_offsets_done;
 
 	// "uaeios" are the best static defaults
-	f->tm1 = 1 << ('u' - 'a');
-	f->tm2 = 1 << ('a' - 'a');
-	f->tm3 = 1 << ('e' - 'a');
-	f->tm4 = 1 << ('i' - 'a');
-	f->tm5 = 1 << ('o' - 'a');
-	f->tm6 = 1 << ('s' - 'a');
+	f->tm1 = remap['u' & 0x1F];
+	f->tm2 = remap['a' & 0x1F];
+	f->tm3 = remap['e' & 0x1F];
+	f->tm4 = remap['i' & 0x1F];
+	f->tm5 = remap['o' & 0x1F];
+	f->tm6 = remap['s' & 0x1F];
 	f->tmm = (f->tm1 | f->tm2 | f->tm3 | f->tm4);
 
 	// Organise full set into 2 subsets, that which
