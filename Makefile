@@ -7,7 +7,7 @@
 
 all: a25 s25 v25 525
 
-CC=clang-12
+CC=clang-13
 #CC=gcc
 
 CFLAGS=-O3 -march=native -Wall
