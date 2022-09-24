@@ -27,7 +27,7 @@
 // ********************* SOLVER ALGORITHM ********************
 
 static void
-add_solution(uint32_t *sp, uint32_t key)
+add_solution(uint32_t *sp)
 {
 	char *so = solutions + (atomic_fetch_add(&num_sol, 1) << 5);
 
@@ -43,7 +43,7 @@ add_solution(uint32_t *sp, uint32_t key)
 	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp++);
 	so[5] = '\t'; so += 6;
 
-	*(uint64_t *)so = *(uint64_t *)hash_lookup(key);
+	*(uint64_t *)so = *(uint64_t *)hash_lookup(*sp);
 	so[5] = ' '; so[6] = ' '; so[7] = '\n';
 } // add_solution
 
@@ -69,31 +69,51 @@ vscan(uint32_t mask, uint32_t *set, uint32_t *n)
 } // vscan
 
 
+void
+find_skipped(struct frequency *f, uint32_t mask, uint32_t *sp)
+{
+	uint32_t *set, *end;
+
+	if (__builtin_popcount(mask) == 25)
+		return add_solution(sp - 5);
+
+	while (mask & f->m) f++;
+
+	CALCULATE_SET_AND_END;
+
+	// Find all matching keys
+	for (uint32_t n; set < end; set += 16)
+		for (uint64_t vresmask = vscan(mask, set, &n); n--; vresmask >>= 4) {
+			uint32_t key = set[vresmask & 0xFULL];
+			*sp = key;
+			find_skipped(f + 1, mask | key, sp + 1);
+		}
+} // find_skipped
+
+
 // find_solutions() which is the busiest loop is kept
 // as small and tight as possible for the most speed
 void
-find_solutions(struct frequency *f, uint32_t mask, int skipped, uint32_t *sp, uint32_t key)
+find_solutions(struct frequency *f, uint32_t mask, uint32_t *sp)
 {
-	if (__builtin_popcount(mask) & 0x10)
-		return add_solution(sp - 4, key);
+	uint32_t *set, *end;
 
-	*sp++ = key;
-	mask |= key;
+	if (__builtin_popcount(mask) == 25)
+		return add_solution(sp - 5);
 
-	for (uint32_t n, *set, *end; ; f++) {
-		if (mask & f->m) continue;
+	while (mask & f->m) f++;
 
-		CALCULATE_SET_AND_END;
+	CALCULATE_SET_AND_END;
 
-		// Find all matching keys
-		for (; set < end; set += 16)
-			for (uint64_t vresmask = vscan(mask, set, &n); n--; vresmask >>= 4)
-				find_solutions(f + 1, mask, skipped, sp, set[vresmask & 0xFULL]);
+	// Find all matching keys
+	for (uint32_t n; set < end; set += 16)
+		for (uint64_t vresmask = vscan(mask, set, &n); n--; vresmask >>= 4) {
+			uint32_t key = set[vresmask & 0xFULL];
+			*sp = key;
+			find_solutions(f + 1, mask | key, sp + 1);
+		}
 
-		if (skipped)
-			return;
-		skipped = 1;
-	}
+	find_skipped(f + 1, mask, sp);
 } // find_solutions
 
 // Thread driver
@@ -107,12 +127,12 @@ solve_work()
 	// Solve starting with least frequent set
 	t = frq[0].sets;
 	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions(frq + 1, 0, 0, solution, t->s[pos]);
+		find_solutions(frq + 1, (*solution = t->s[pos]), solution + 1);
 
 	// Solve after skipping least frequent set
 	t = frq[1].sets;
 	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_solutions(frq + 2, 0, 1, solution, t->s[pos]);
+		find_skipped(frq + 2, (*solution = t->s[pos]), solution + 1);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
