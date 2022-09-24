@@ -159,7 +159,8 @@ calc_key(const char *wd)
 
 #define	HASHSZ          (1 << HASHBITS)
 #define HASHMASK        (HASHSZ - 1)
-#define key_hash(x)	(((x * 5287) ^ (x >> 11)) & HASHMASK)
+#define key_hash(x)	((x ^ ((x * 11753) >> 10)) & HASHMASK)
+//#define key_hash(x)	(((x * 5287) ^ (x >> 11)) & HASHMASK)
 //#define key_hash(x)	(((x * 13334) ^ x ^ (x >> 12)) & HASHMASK)
 //#define key_hash(x)	(x ^ (x >> 6) ^ (x >> 10) ^ (~x >> 1)) & HASHMASK
 
@@ -220,7 +221,7 @@ hash_lookup(uint32_t key)
 			return NULL;
 
 		if (++hashpos == HASHSZ)
-			hashpos -= HASHSZ;
+			hashpos = 0;
 	} while (1);
 
 	return words + posmap[hashpos];

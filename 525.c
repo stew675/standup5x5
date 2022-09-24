@@ -59,14 +59,14 @@ vscan(uint32_t mask, uint32_t *set)
 } // vscan
 
 void
-find_skipped(struct frequency *f, uint32_t mask, uint32_t *sp)
+find_skipped(uint32_t mask, uint32_t *sp)
 {
 	uint32_t *set, *end;
 
-	if (__builtin_popcount(mask) == 25)
+	if (__builtin_popcount(mask) == 26)
 		return add_solution(sp - 4);
 
-	while (mask & (++f)->m);
+	struct frequency *f = frq + __builtin_ctz(~mask);
 
 	CALCULATE_SET_AND_END;
 
@@ -74,21 +74,21 @@ find_skipped(struct frequency *f, uint32_t mask, uint32_t *sp)
 		for (uint16_t vresmask = vscan(mask, set); vresmask; vresmask &= vresmask - 1) {
 			uint32_t key = set[__builtin_ctz(vresmask)];
 			*sp = key;
-			find_skipped(f, mask | key, sp);
+			find_skipped(mask | key, sp);
 		}
 } // find_solutions
 
 // find_solutions() which is the busiest loop is kept
 // as small and tight as possible for the most speed
 void
-find_solutions(struct frequency *f, uint32_t mask, uint32_t *sp)
+find_solutions(uint32_t mask, uint32_t *sp)
 {
 	uint32_t *set, *end;
 
 	if (__builtin_popcount(mask) == 25)
 		return add_solution(sp - 4);
 
-	while (mask & (++f)->m);
+	struct frequency *f = frq + __builtin_ctz(~mask);
 
 	CALCULATE_SET_AND_END;
 
@@ -96,10 +96,10 @@ find_solutions(struct frequency *f, uint32_t mask, uint32_t *sp)
 		for (uint16_t vresmask = vscan(mask, set); vresmask; vresmask &= vresmask - 1) {
 			uint32_t key = set[__builtin_ctz(vresmask)];
 			*sp = key;
-			find_solutions(f, mask | key, sp);
+			find_solutions(mask | key, sp);
 		}
 
-	find_skipped(f, mask, sp - 1);
+	find_skipped(mask | f->m, sp - 1);
 } // find_solutions
 
 // Thread driver
@@ -113,12 +113,12 @@ solve_work()
 	// Solve starting with least frequent set
 	t = frq[0].sets;
 	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions(frq, (*solution = t->s[pos]), solution);
+		find_solutions((*solution = t->s[pos]), solution);
 
 	// Solve after skipping least frequent set
 	t = frq[1].sets;
 	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_skipped(frq + 1, (*solution = t->s[pos]), solution);
+		find_skipped((*solution = t->s[pos]) | frq[0].m, solution);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
