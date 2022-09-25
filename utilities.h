@@ -159,10 +159,8 @@ calc_key(const char *wd)
 
 #define	HASHSZ          (1 << HASHBITS)
 #define HASHMASK        (HASHSZ - 1)
-#define key_hash(x)	((x ^ ((x * 11753) >> 10)) & HASHMASK)
-//#define key_hash(x)	(((x * 5287) ^ (x >> 11)) & HASHMASK)
-//#define key_hash(x)	(((x * 13334) ^ x ^ (x >> 12)) & HASHMASK)
-//#define key_hash(x)	(x ^ (x >> 6) ^ (x >> 10) ^ (~x >> 1)) & HASHMASK
+#define key_hash(x)	((x ^ ((x * 636079) >> 10)) & HASHMASK)
+//#define key_hash(x)	((x ^ ((x * 11753) >> 10)) & HASHMASK)
 
 // Key Hash Entries
 // We keep keys and positions in separate array because faster to initialise
