@@ -79,6 +79,10 @@ static	uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
 static	uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
 static	uint32_t	unmap[32] __attribute__((aligned(64)));
 
+// Per-reader frequency collation stats.  We set to 32, instead of just 26, to
+// ensure readers aren't sharing CPU cache lines (which are 64 bytes wide)
+static	uint32_t	cfs[MAX_READERS][32] __attribute__((aligned(64))) = {0};
+
 static void solve();
 static void solve_work();
 static void set_tier_offsets(struct frequency *f);
@@ -90,7 +94,8 @@ print_time_taken(char *label, struct timespec *ts, struct timespec *te)
 	time_taken *= (te->tv_sec - ts->tv_sec);
 	time_taken += (te->tv_nsec - ts->tv_nsec);
 
-	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000, (time_taken % 1000000000) / 1000);
+	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000,
+				     (time_taken % 1000000000) / 1000);
 } // print_time_taken
  
 //********************* INIT FUNCTIONS **********************
@@ -181,12 +186,10 @@ hash_insert(uint32_t key, uint32_t pos)
 		if (keymap[hashpos] == key)
 			return 0;
 
-		// Handle full hash table condition
-		if (++col == HASHSZ)
-			return 0;
-
 		if (++hashpos == HASHSZ)
 			hashpos = 0;
+
+		col++;
 	} while (1);
 
 	// Now insert at hash location
@@ -213,7 +216,7 @@ hash_lookup(uint32_t key)
 			return NULL;
 
 		if (++hashpos == HASHSZ)
-			hashpos -= HASHSZ;
+			hashpos = 0;
 	} while (1);
 
 	return words + posmap[hashpos];
@@ -257,10 +260,11 @@ print_bits(char *label, uint64_t v)
 void
 find_words(char *s, char *e, uint32_t rn)
 {
-	char a = 'a', z = 'z';
-	char *fives[READ_CHUNK / 5];
+	char *fives[(READ_CHUNK / 6) + 1] __attribute__((aligned(64)));
 	char **fivep = fives;
+	char a = 'a', z = 'z';
 	int64_t msbset = 0x8000000000000000;
+	uint32_t *cf = cfs[rn];
 
 #ifdef __AVX2__
 	// AVX512 is about 10% faster than AVX2 for processing the words
@@ -390,10 +394,20 @@ find_words(char *s, char *e, uint32_t rn)
 	fivep = fives;
 	while (num--) {
 		char *w = *fivep++;
-		wordkeys[pos] = calc_key(w);
 
 		// Copy word to word table as a single 64-bit copy
-		*(uint64_t *)(words + (pos++ << 3)) = *(uint64_t *)w;
+		*(uint64_t *)(words + (pos << 3)) = *(uint64_t *)w;
+
+		// Copy key to wordkeys array
+		uint32_t key = calc_key(w);
+		wordkeys[pos++] = key;
+
+		// Get character frequencies
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++;
 	}
 } // find_words
 
@@ -445,7 +459,6 @@ uint64_t
 process_words()
 {
 	uint64_t spins = 0;
-	uint32_t cf[26] __attribute__ ((aligned(64))) = {0};
 
 #ifdef HASH_TABLE_TIMES
 	struct timespec t1[1], t2[1];
@@ -479,14 +492,7 @@ process_words()
 		}
 
 		*k = key;
-		k += hash_insert(key, pos);
-		pos++;
-
-		// Get character frequencies
-		while (key) {
-			cf[__builtin_ctz(key)]++;
-			key &= key - 1;
-		}
+		k += hash_insert(key, pos++);
 	}
 
 #ifdef HASH_TABLE_TIMES
@@ -496,8 +502,9 @@ process_words()
 
 	// All readers are done.  Collate character frequency stats
 	frq_init();
-	for (int c = 0; c < 26; c++)
-		frq[c].f = cf[c];
+	for (int rn = 0; rn < num_readers; rn++)
+		for (int c = 0; c < 26; c++)
+			frq[c].f += cfs[rn][c];
 
 	return spins;
 } // process_words
