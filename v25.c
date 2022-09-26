@@ -72,10 +72,13 @@ vscan(uint32_t mask, uint32_t *set, uint32_t *n)
 void
 find_skipped(uint32_t mask, uint32_t *sp)
 {
-	uint32_t n, *set, *end;
+	uint32_t n = __builtin_popcount(mask), *set, *end;
 
-	if (__builtin_popcount(mask) == 26)
+	if (n == 26)
 		return add_solution(sp - 4);
+
+	if (((8 - __builtin_popcount(mask & gv)) * 5) + n < 26)
+		return;
 
 	struct frequency *f = frq + __builtin_ctz(~mask);
 
@@ -96,10 +99,13 @@ find_skipped(uint32_t mask, uint32_t *sp)
 void
 find_solutions(uint32_t mask, uint32_t *sp)
 {
-	uint32_t n, *set, *end;
+	uint32_t n = __builtin_popcount(mask), *set, *end;
 
-	if (__builtin_popcount(mask) == 25)
+	if (n == 25)
 		return add_solution(sp - 4);
+
+	if (((8 - __builtin_popcount(mask & gv)) * 5) + n < 25)
+		return;
 
 	struct frequency *f = frq + __builtin_ctz(~mask);
 

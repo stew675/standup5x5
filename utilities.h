@@ -93,11 +93,22 @@ print_time_taken(char *label, struct timespec *ts, struct timespec *te)
 	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000, (time_taken % 1000000000) / 1000);
 } // print_time_taken
  
+static uint32_t gv = 0;
+
 void
 build_remap()
 {
 	for (uint32_t one = 1, i = 0; i < 26; i++)
 		remap[(search_order[i] & 0x1F)] = one << i;
+
+	gv |= remap[('a' & 0x1F)];
+	gv |= remap[('e' & 0x1F)];
+	gv |= remap[('i' & 0x1F)];
+	gv |= remap[('o' & 0x1F)];
+	gv |= remap[('u' & 0x1F)];
+	gv |= remap[('y' & 0x1F)];
+	gv |= remap[('s' & 0x1F)];
+	gv |= remap[('t' & 0x1F)];
 } // build_remap
 
 
