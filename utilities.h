@@ -16,8 +16,8 @@ static struct worker {
 
 // Set Pointers (8 bytes in size)
 static struct tier {
-	uint32_t	s;	// Offset to start of set
-	uint32_t	e;	// Offset to end of set
+	uint32_t	*set;	// Offset to start of set
+	uint32_t	*end;	// Offset to end of set
 } tiers[26][64] __attribute__ ((aligned(64)));
 
 // Character frequency recording
@@ -25,17 +25,21 @@ static struct frequency {
 	// Mask (1 << (c - 'a'))
 	uint32_t	m	__attribute__ ((aligned(64)));
 	uint32_t	f;		// Frequency
+
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
 	uint32_t	tm3;		// Tiered Mask 3
 	uint32_t	tm4;		// Tiered Mask 4
 	uint32_t	tm5;		// Tiered Mask 5
 	uint32_t	tm6;		// Tiered Mask 6
-	uint32_t	tmm;		// Logical OR of tm1..tm4
-	uint16_t	ready;		// Ready to set up
-	uint16_t	b;		// char - 'a'
+
 	struct tier	*tiers;		// The set tiers
-	uint32_t	*keys;		// The key sets
+
+	uint32_t	tmm;		// Logical OR of tm1..tm4
+
+	uint16_t	b;		// char - 'a'
+	uint16_t	ready;		// Ready to set up
+
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -680,36 +684,38 @@ by_frequency_hi(const void *a, const void *b)
 #ifdef __BMI2__
 
 #define CALCULATE_SET_AND_END				\
-	do {						\
-		struct tier *t = f->tiers;		\
-		t += _pext_u32(mask, f->tmm);		\
-		set = f->keys + t->s;			\
-		end = f->keys + t->e;			\
-	} while (0)
+	{						\
+		struct tier *t = f->tiers +		\
+			_pext_u32(mask, f->tmm);	\
+		set = t->set;				\
+		end = t->end;				\
+	}
 
 #else
 
 #define CALCULATE_SET_AND_END				\
-	do {						\
+	{						\
 		uint32_t tnum = !!(mask & f->tm1);	\
-		tnum += (!!(mask & f->tm2) << 1);	\
-		tnum += (!!(mask & f->tm3) << 2);	\
-		tnum += (!!(mask & f->tm4) << 3);	\
-		tnum += (!!(mask & f->tm5) << 4);	\
-		tnum += (!!(mask & f->tm6) << 5);	\
+		tnum |= (!!(mask & f->tm2) << 1);	\
+		tnum |= (!!(mask & f->tm3) << 2);	\
+		tnum |= (!!(mask & f->tm4) << 3);	\
+		tnum |= (!!(mask & f->tm5) << 4);	\
+		tnum |= (!!(mask & f->tm6) << 5);	\
 		struct tier *t = f->tiers + tnum;	\
-		set = f->keys + t->s;			\
-		end = f->keys + t->e;			\
-	} while (0)
+		set = t->set;				\
+		end = t->end;				\
+	}
 
 #endif
 
 
 void
-setup_tkeys(struct frequency *f, uint32_t t0_toff1, uint32_t t0_toff2, uint32_t t0_toff3)
+setup_tkeys(struct frequency *f, uint32_t t0_toff1,
+		uint32_t t0_toff2, uint32_t t0_toff3)
 {
 	struct tier	*t0 = f->tiers;
-	uint32_t	*kp = f->keys + t0->e + NUM_POISON;
+	uint32_t	t0_len = t0->end - t0->set;
+	uint32_t	*kp = t0->end + NUM_POISON;
 	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
 	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
 	uint32_t	masks[16];
@@ -735,35 +741,37 @@ setup_tkeys(struct frequency *f, uint32_t t0_toff1, uint32_t t0_toff2, uint32_t 
 
 	// Create key arrays for each tier set mask
 	for (uint32_t i = 0; i < 16; i++) {
-		uint32_t tstart, toff1, toff2, toff3, tend;
+		uint32_t toff1, toff2, toff3;
+		uint32_t *ts, *te;
 		uint32_t mask = masks[i];
 
 		if (i == 0) {
-			tstart = 0;
+			ts = t0->set;
 			toff1 = t0_toff1;
 			toff2 = t0_toff2;
 			toff3 = t0_toff3;
-			tend = t0->e;
+			te = t0->end;
 		} else {
-			uint32_t *ks = f->keys;
+			uint32_t *ks = t0->set;
 
-			tstart = kp - f->keys;
+			ts = kp;
 
-			for (uint32_t len = t0_toff1 - t0->s; len--; )
+			for (uint32_t len = t0_toff1; len--; )
 				kp += !((*kp = *ks++) & mask);
-			toff1 = kp - f->keys;
+			toff1 = kp - ts;
 
 			for (uint32_t len = t0_toff2 - t0_toff1; len--; )
 				kp += !((*kp = *ks++) & mask);
-			toff2 = kp - f->keys;
+			toff2 = kp - ts;
 
 			for (uint32_t len = t0_toff3 - t0_toff2; len--; )
 				kp += !((*kp = *ks++) & mask);
-			toff3 = kp - f->keys;
+			toff3 = kp - ts;
 
-			for (uint32_t len = t0->e - t0_toff3; len--; )
+			for (uint32_t len = t0_len - t0_toff3; len--; )
 				kp += !((*kp = *ks++) & mask);
-			tend = kp - f->keys;
+
+			te = kp;
 
 			for (uint32_t p = NUM_POISON; p--; )
 				*kp++ = (uint32_t)(~0);
@@ -771,26 +779,24 @@ setup_tkeys(struct frequency *f, uint32_t t0_toff1, uint32_t t0_toff2, uint32_t 
 
 		for (uint32_t tm5 = 0; tm5 < 2; tm5++) {
 			for (uint32_t tm6 = 0; tm6 < 2; tm6++) {
-				uint32_t tnum = i + (tm5 << 4) | (tm6 << 5);
+				uint32_t tnum = i + ((tm5 << 4) | (tm6 << 5));
 				struct tier *tts = f->tiers + tnum;
-
-				assert(tnum < 64);
 
 				if (tm5) {
 					if (tm6) {
-						tts->s = toff2;
-						tts->e = toff3;
+						tts->set = ts + toff2;
+						tts->end = ts + toff3;
 					} else {
-						tts->s = toff2;
-						tts->e = tend;
+						tts->set = ts + toff2;
+						tts->end = te;
 					}
 				} else {
 					if (tm6) {
-						tts->s = toff1;
-						tts->e = toff3;
+						tts->set = ts + toff1;
+						tts->end = ts + toff3;
 					} else {
-						tts->s = tstart;
-						tts->e = tend;
+						tts->set = ts;
+						tts->end = te;
 					}
 				}
 			}
@@ -812,7 +818,7 @@ set_tier_offsets(struct frequency *f)
 
 	// "poison" NUM_POISON ending values with all bits set
 	struct tier *t = f->tiers;
-	ks = f->keys + t->e;
+	ks = t->end;
 	for (int p = NUM_POISON; p--; )
 		*ks++ = (uint32_t)(~0);
 
@@ -848,14 +854,14 @@ set_tier_offsets(struct frequency *f)
 	mask = f->tm5;
 
 	// First subset has tm5, and then not
-	ks = kp = f->keys;
-	len = t->e;
+	ks = kp = t->set;
+	len = t->end - kp;
 	for (; len--; ++ks)
 		if ((key = *ks) & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	toff2 = kp - f->keys;
+	toff2 = kp - t->set;
 
 	// Now organise the first tm5 subset into that which
 	// has tm6 followed by that which does not, and then
@@ -865,24 +871,24 @@ set_tier_offsets(struct frequency *f)
 	mask = f->tm6;
 
 	// First tm5 subset has tm6 then not
-	ks = kp = f->keys;
+	ks = kp = t->set;
 	len = toff2;
 	for (; len--; ++ks)
 		if ((key = *ks) & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	toff1 = kp - f->keys;
+	toff1 = kp - t->set;
 
 	// Second tm5 subset does not have tm6 then has
-	ks = kp = f->keys + toff2;
-	len = t->e - toff2;
+	ks = kp = t->set + toff2;
+	len = t->end - kp;
 	for (; len--; ++ks)
 		if (!((key = *ks) & mask)) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	toff3 = kp - f->keys;
+	toff3 = kp - t->set;
 
 	setup_tkeys(f, toff1, toff2, toff3);
 
@@ -932,7 +938,7 @@ setup_frequency_sets()
 	// Setup for key spray
 	uint32_t *bp[32] __attribute__((aligned(64)));
 	for (uint32_t i = 0; i < 26; i++)
-		frq[i].keys = bp[i] = tkeys[i];
+		bp[i] = tkeys[i];
 
 	// Spray keys to buckets
 	for (uint32_t *kp = keys, key; (key = *kp++); ) {
@@ -951,8 +957,8 @@ setup_frequency_sets()
 	for (int i = 0; i < 26; i++) {
 		struct frequency *f = frq + i;
 
-		f->tiers[0].s = 0;
-		f->tiers[0].e = bp[i] - f->keys;
+		f->tiers[0].set = tkeys[i];
+		f->tiers[0].end = bp[i];
 
 		// Instruct any waiting worker thread to start setup
 		// but we have to do it ourselves if single threaded
@@ -1048,7 +1054,7 @@ main(int argc, char *argv[])
 	for (int i = 0; i < 26; i++) {
 		struct tier *t = frq[i].tiers;
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length=%4d\n", c, t->e);
+		printf("%c set_length=%4ld\n", c, t->end - t->set);
 	}
 	printf("\n\n");
 

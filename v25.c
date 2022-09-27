@@ -122,17 +122,19 @@ solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
 	struct tier *t;
-	int32_t pos;
+	int32_t pos, len;
 
 	// Solve starting with least frequent set
 	t = frq[0].tiers;
-	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->e)
-		find_solutions(frq, (*solution = frq[0].keys[pos]), solution);
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set0pos, 1)) < len)
+		find_solutions(frq, (*solution = t->set[pos]), solution);
 
 	// Solve after skipping least frequent set
 	t = frq[1].tiers;
-	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->e)
-		find_skipped(frq + 1, (*solution = frq[1].keys[pos]), solution);
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set1pos, 1)) < len)
+		find_skipped(frq + 1, (*solution = t->set[pos]), solution);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
