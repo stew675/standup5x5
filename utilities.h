@@ -19,11 +19,11 @@ static struct tier {
 	// Pointer to set
 	uint32_t	*s __attribute__ ((aligned(32)));
 	uint32_t	l;	// Length of set
-	uint32_t	toff1;	// Tiered Offset 1
-	uint32_t	toff2;	// Tiered Offset 2
-	uint32_t	toff3;	// Tiered Offset 3
-	uint32_t	tlen3;	// Length of toff3
-} tiers[26][16] __attribute__ ((aligned(64)));
+//	uint32_t	toff1;	// Tiered Offset 1
+//	uint32_t	toff2;	// Tiered Offset 2
+//	uint32_t	toff3;	// Tiered Offset 3
+//	uint32_t	tlen3;	// Length of toff3
+} tiers[26][64] __attribute__ ((aligned(64)));
 
 // Character frequency recording
 static struct frequency {
@@ -680,7 +680,7 @@ by_frequency_hi(const void *a, const void *b)
 } // by_frequency_hi
 
 
-#ifdef __BMI2__
+#ifdef _BMI2__
 #define _USE_PEXT_U32_
 #endif
 
@@ -691,13 +691,23 @@ by_frequency_hi(const void *a, const void *b)
 #define GET_TIER struct tier *t = f->sets + !!(mask & f->tm1) +	\
 				     (!!(mask & f->tm2) << 1) +	\
 				     (!!(mask & f->tm3) << 2) +	\
-				     (!!(mask & f->tm4) << 3)
+				     (!!(mask & f->tm4) << 3) + \
+				     (!!(mask & f->tm5) << 4) + \
+				     (!!(mask & f->tm6) << 5)
 #endif
 
 // The sequence of instructions here is intended.  It achieves good concurrency
 // in the CPU by engaging both the ALU and AGU, which appears to be why f->tm5
 // tm6/tmm is faster than if using global variables or #defines
 
+#define CALCULATE_SET_AND_END		\
+	do {				\
+		GET_TIER;		\
+		set = t->s;		\
+		end = t->s + t->l;	\
+	} while (0)
+
+#if 0
 #define CALCULATE_SET_AND_END					\
 	do {							\
 		GET_TIER;					\
@@ -708,15 +718,15 @@ by_frequency_hi(const void *a, const void *b)
 		end = t->s + off;				\
 		set = t->s + mx + (mf * t->toff2);		\
 	} while (0)
+#endif
 
 void
-setup_tkeys(struct frequency *f)
+setup_tkeys(struct frequency *f, uint32_t t0_toff1, uint32_t t0_toff2, uint32_t t0_toff3)
 {
 	struct tier	*t0 = f->sets;
 	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
 	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
 	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
-	uint32_t	*ks, len;
 	uint32_t	masks[16];
 
 #ifdef _USE_PEXT_U32_
@@ -754,36 +764,54 @@ setup_tkeys(struct frequency *f)
 	masks[15] = tm4 | tm3 | tm2 | tm1;
 
 	// Create key arrays for each tier set mask
-	for (uint32_t mask, i = 1; i < 16; i++) {
-		struct tier *ts = f->sets + i;
-		mask = masks[i];
+	for (uint32_t i = 0; i < 16; i++) {
+		uint32_t *ts, toff1, toff2, toff3, tlen;
+		uint32_t mask = masks[i];
 
-		ks = t0->s;
-		ts->s = kp;
+		if (i == 0) {
+			ts = t0->s;
+			toff1 = t0_toff1;
+			toff2 = t0_toff2;
+			toff3 = t0_toff3;
+			tlen = t0->l;
+		} else {
+			uint32_t *ks = t0->s;
 
-		len = t0->toff1;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->toff1 = kp - ts->s;
+			ts = kp;
 
-		len = t0->toff2 - t0->toff1;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->toff2 = kp - ts->s;
+			for (uint32_t len = t0_toff1; len--; )
+				kp += !((*kp = *ks++) & mask);
+			toff1 = kp - ts;
 
-		len = t0->toff3 - t0->toff2;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->toff3 = kp - ts->s;
+			for (uint32_t len = t0_toff2 - t0_toff1; len--; )
+				kp += !((*kp = *ks++) & mask);
+			toff2 = kp - ts;
 
-		len = t0->l - t0->toff3;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->l = kp - ts->s;
-		ts->tlen3 = ts->l - ts->toff3;
+			for (uint32_t len = t0_toff3 - t0_toff2; len--; )
+				kp += !((*kp = *ks++) & mask);
+			toff3 = kp - ts;
 
-		for (uint32_t p = NUM_POISON; p--; )
-			*kp++ = (uint32_t)(~0);
+			for (uint32_t len = t0->l - t0_toff3; len--; )
+				kp += !((*kp = *ks++) & mask);
+			tlen = kp - ts;
+
+			for (uint32_t p = NUM_POISON; p--; )
+				*kp++ = (uint32_t)(~0);
+		}
+
+		for (uint32_t tm5 = 0; tm5 < 2; tm5++) {
+		    for (uint32_t tm6 = 0; tm6 < 2; tm6++) {
+			struct tier *tts = f->sets + i;
+			tts += ((tm5 << 4) + (tm6 << 5));
+
+			uint32_t mf = !!tm5;
+			uint32_t ms = !tm6;
+			uint32_t mx = !(ms | mf) * toff1;
+
+			tts->l = toff3 + (ms * (tlen - toff3));
+			tts->s = ts + mx + (mf * toff2);
+		    }
+		}
 	}
 } // setup_tkeys
 
@@ -810,13 +838,15 @@ set_tier_offsets(struct frequency *f)
 		goto set_tier_offsets_done;
 
 	// "uaeios" are the best static defaults
-	f->tm1 = 1 << ('u' - 'a');
-	f->tm2 = 1 << ('a' - 'a');
-	f->tm3 = 1 << ('e' - 'a');
-	f->tm4 = 1 << ('i' - 'a');
-	f->tm5 = 1 << ('o' - 'a');
-	f->tm6 = 1 << ('s' - 'a');
-	f->tmm = (f->tm1 | f->tm2 | f->tm3 | f->tm4);
+	f->tm1 = 1 << ('a' - 'a');
+	f->tm2 = 1 << ('e' - 'a');
+	f->tm3 = 1 << ('i' - 'a');
+	f->tm4 = 1 << ('o' - 'a');
+	f->tm5 = 1 << ('s' - 'a');
+	f->tm6 = 1 << ('u' - 'a');
+	f->tmm = (f->tm1 | f->tm2 | f->tm3 | f->tm4 | f->tm5 | f->tm6);
+
+	uint32_t toff1, toff2, toff3;
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
@@ -831,7 +861,7 @@ set_tier_offsets(struct frequency *f)
 			*ks = *kp;
 			*kp++ = key;
 		}
-	t->toff2 = kp - t->s;
+	toff2 = kp - t->s;
 
 	// Now organise the first tm5 subset into that which
 	// has tm6 followed by that which does not, and then
@@ -842,26 +872,25 @@ set_tier_offsets(struct frequency *f)
 
 	// First tm1 subset has tm2 then not
 	ks = kp = t->s;
-	len = t->toff2;
+	len = toff2;
 	for (; len--; ++ks)
 		if ((key = *ks) & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	t->toff1 = kp - t->s;
+	toff1 = kp - t->s;
 
 	// Second tm5 subset does not have tm6 then has
-	ks = kp = t->s + t->toff2;
-	len = t->l - t->toff2;
+	ks = kp = t->s + toff2;
+	len = t->l - toff2;
 	for (; len--; ++ks)
 		if (!((key = *ks) & mask)) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	t->toff3 = kp - t->s;
-	t->tlen3 = t->l - t->toff3;
+	toff3 = kp - t->s;
 
-	setup_tkeys(f);
+	setup_tkeys(f, toff1, toff2, toff3);
 
 set_tier_offsets_done:
 	// Mark as done
@@ -1026,8 +1055,7 @@ main(int argc, char *argv[])
 	for (int i = 0; i < 26; i++) {
 		struct tier *t = frq[i].sets;
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
-			c, t->l, t->toff1, t->toff2, t->toff3);
+		printf("%c set_length=%4d\n", c, t->l);
 	}
 	printf("\n\n");
 
