@@ -49,20 +49,20 @@ void
 find_skipped(struct frequency *f, uint32_t mask, uint32_t *sp)
 {
 	if (__builtin_popcount(mask) == 25)
-		return add_solution(sp - 4);
+		return add_solution(sp - 5);
 
 	uint32_t ks[1024] __attribute__((aligned(64)));
 	uint32_t key, *set, *end, *kp = ks;
 
-	while (mask & (++f)->m);
+	while (mask & f->m) f++;
 
 	CALCULATE_SET_AND_END;
 
 	while (set < end)
 		kp += !((*kp = *set++) & mask);
 
-	for (sp++, *kp = 0, kp = ks; (*sp = key = *kp++); )
-		find_skipped(f,  mask | key, sp);
+	for (*kp = 0, kp = ks; (*sp = key = *kp++); )
+		find_skipped(f + 1,  mask | key, sp + 1);
 } // find_solutions
 
 // Since find_solutions() is the busiest function we keep the loops
@@ -71,22 +71,22 @@ void
 find_solutions(struct frequency *f, uint32_t mask, uint32_t *sp)
 {
 	if (__builtin_popcount(mask) == 25)
-		return add_solution(sp - 4);
+		return add_solution(sp - 5);
 
 	uint32_t ks[1024] __attribute__((aligned(64)));
 	uint32_t key, *set, *end, *kp = ks;
 
-	while (mask & (++f)->m);
+	while (mask & f->m) f++;
 
 	CALCULATE_SET_AND_END;
 
 	while (set < end)
 		kp += !((*kp = *set++) & mask);
 
-	for (sp++, *kp = 0, kp = ks; (*sp = key = *kp++); )
-		find_solutions(f, mask | key, sp);
+	for (*kp = 0, kp = ks; (*sp = key = *kp++); )
+		find_solutions(f + 1, mask | key, sp + 1);
 
-	find_skipped(f, mask, sp - 1);
+	find_skipped(f + 1, mask, sp);
 } // find_solutions
 
 // Thread driver
@@ -101,13 +101,13 @@ solve_work()
 	t = frq[0].tiers;
 	len = t->end - t->set;
 	while ((pos = atomic_fetch_add(&set0pos, 1)) < len)
-		find_solutions(frq, (*solution = t->set[pos]), solution);
+		find_solutions(frq + 1, (*solution = t->set[pos]), solution);
 
 	// Solve after skipping least frequent set
 	t = frq[1].tiers;
 	len = t->end - t->set;
 	while ((pos = atomic_fetch_add(&set1pos, 1)) < len)
-		find_skipped(frq + 1, (*solution = t->set[pos]), solution);
+		find_skipped(frq + 2, (*solution = t->set[pos]), solution);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work

@@ -7,10 +7,10 @@
 
 all: a25 s25 v25 525
 
-CC=clang-13
+CC=clang-12
 #CC=gcc
 
-CFLAGS=-O3 -march=native -Wall
+CFLAGS=-O3 -Wall -static -march=native
 LIBS=-lpthread
 
 a25: a25.c utilities.h Makefile
