@@ -7,7 +7,7 @@
 #define MAX_READERS            8	// No more than 8 ever needed
 
 static const char	*solution_filename = "solutions.txt";
-static const char	*search_order = "qjxzvfwkbgpmhydcuntloirsea";
+static const char	*search_order = "qjxzvfwkbgpmhydcntlrsuoiea";
 
 // Worker thread state
 static struct worker {
@@ -93,7 +93,8 @@ print_time_taken(char *label, struct timespec *ts, struct timespec *te)
 	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000, (time_taken % 1000000000) / 1000);
 } // print_time_taken
  
-static uint32_t gv = 0;
+static uint32_t gv1 = 0;
+static uint32_t gv2 = 0;
 
 void
 build_remap()
@@ -101,14 +102,25 @@ build_remap()
 	for (uint32_t one = 1, i = 0; i < 26; i++)
 		remap[(search_order[i] & 0x1F)] = one << i;
 
-	gv |= remap[('a' & 0x1F)];
-	gv |= remap[('e' & 0x1F)];
-	gv |= remap[('i' & 0x1F)];
-	gv |= remap[('o' & 0x1F)];
-	gv |= remap[('u' & 0x1F)];
-	gv |= remap[('y' & 0x1F)];
-	gv |= remap[('s' & 0x1F)];
-	gv |= remap[('t' & 0x1F)];
+	// aeiourxy
+	gv1 |= remap[('a' & 0x1F)];
+	gv1 |= remap[('e' & 0x1F)];
+	gv1 |= remap[('i' & 0x1F)];
+	gv1 |= remap[('o' & 0x1F)];
+	gv1 |= remap[('u' & 0x1F)];
+	gv1 |= remap[('r' & 0x1F)];
+	gv1 |= remap[('x' & 0x1F)];
+	gv1 |= remap[('y' & 0x1F)];
+
+	// aeiouqty
+	gv2 |= remap[('a' & 0x1F)];
+	gv2 |= remap[('e' & 0x1F)];
+	gv2 |= remap[('i' & 0x1F)];
+	gv2 |= remap[('o' & 0x1F)];
+	gv2 |= remap[('u' & 0x1F)];
+	gv2 |= remap[('q' & 0x1F)];
+	gv2 |= remap[('t' & 0x1F)];
+	gv2 |= remap[('y' & 0x1F)];
 } // build_remap
 
 

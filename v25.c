@@ -77,7 +77,10 @@ find_skipped(uint32_t mask, uint32_t *sp)
 	if (n == 26)
 		return add_solution(sp - 4);
 
-	if (((8 - __builtin_popcount(mask & gv)) * 5) + n < 26)
+	if (((8 - __builtin_popcount(mask & gv1)) * 5) + n < 26)
+		return;
+
+	if (((8 - __builtin_popcount(mask & gv2)) * 5) + n < 26)
 		return;
 
 	struct frequency *f = frq + __builtin_ctz(~mask);
@@ -104,7 +107,9 @@ find_solutions(uint32_t mask, uint32_t *sp)
 	if (n == 25)
 		return add_solution(sp - 4);
 
-	if (((8 - __builtin_popcount(mask & gv)) * 5) + n < 25)
+	if (((8 - __builtin_popcount(mask & gv1)) * 5) + n < 25)
+		return;
+	if (((8 - __builtin_popcount(mask & gv2)) * 5) + n < 25)
 		return;
 
 	struct frequency *f = frq + __builtin_ctz(~mask);
