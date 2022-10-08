@@ -56,14 +56,14 @@ create_sets()
 	qsort(frq, 26, sizeof(*frq), by_frequency_hi);
 
 	mask = frq[0].m;
-	frq[0].sets[0].s = kp;
+	frq[0].tiers[0].set = kp;
 	for (ks = kp; (key = *ks); ks++) {
 		if (key & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
 	}
-	frq[0].sets[0].l = kp - frq[0].sets[0].s;
+	frq[0].tiers[0].end = kp;
 
 	// 0-terminate this frequency key set
 	*ks++ = *kp;
@@ -72,8 +72,8 @@ create_sets()
 	// Ensure key set is 0 terminated for next loop
 	*ks = 0;
 
-	frq[1].sets[0].s = kp;
-	frq[1].sets[0].l = ks - kp;
+	frq[1].tiers[0].set = kp;
+	frq[1].tiers[0].end = ks;
 } // create_sets
 
 
@@ -163,7 +163,7 @@ atomic_int	solvers_synced = 0;
 static inline uint32_t
 apply_four()
 {
-	uint32_t *zp = frq[0].sets[0].s, key, *fp = fourset, pos, *f, *z;
+	uint32_t *zp = frq[0].tiers[0].set, key, *fp = fourset, pos, *f, *z;
 
 	do {
 		while (four_pos >= num_four) {
@@ -199,12 +199,13 @@ void
 solve_work()
 {
 	uint32_t scanbuf[4096];
-	uint32_t *dp = frq[1].sets[0].s, *sp = scanbuf;
+	uint32_t *dp = frq[1].tiers[0].set, *sp = scanbuf;
 
 	for (;;) {
 		int pos = atomic_fetch_add(&driver_pos, 1);
+		int len = frq[1].tiers[0].end - frq[1].tiers[0].set;
 
-		if (pos >= frq[1].sets[0].l)
+		if (pos >= len)
 			break;
 
 		uint32_t *d = dp + pos;
@@ -326,8 +327,8 @@ main(int argc, char *argv[])
 	printf("Hash Collisions     = %8u\n", hash_collisions);
 	printf("Number of threads   = %8d\n", nthreads);
 	printf("Number of Four Sets = %8d\n", num_four);
-	printf("Zero Set Size       = %8d\n", frq[0].sets[0].l);
-	printf("Driver Set Size     = %8d\n", frq[1].sets[0].l);
+	printf("Zero Set Size       = %8ld\n", frq[0].tiers[0].end - frq[0].tiers[0].set);
+	printf("Driver Set Size     = %8ld\n", frq[1].tiers[0].end - frq[1].tiers[0].set);
 
 	printf("\nNUM SOLUTIONS = %d\n", num_sol);
 

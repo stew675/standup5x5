@@ -10,7 +10,7 @@ all: s25 v25 525
 CC=clang-13
 #CC=gcc
 
-CFLAGS=-O3 -march=native -Wall
+CFLAGS=-O3 -Wall -march=native
 LIBS=-lpthread
 
 s25: s25.c utilities.h Makefile

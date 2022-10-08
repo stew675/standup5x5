@@ -93,17 +93,19 @@ solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
 	struct tier *t;
-	int32_t pos;
+	int32_t pos, len;
 
 	// Solve starting with least frequent set
-	t = frq[0].sets;
-	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions((*solution = t->s[pos]), solution);
+	t = frq[0].tiers;
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set0pos, 1)) < len)
+		find_solutions((*solution = t->set[pos]), solution);
 
 	// Solve after skipping least frequent set
-	t = frq[1].sets;
-	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_skipped((*solution = t->s[pos]) | frq[0].m, solution);
+	t = frq[1].tiers;
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set1pos, 1)) < len)
+		find_skipped((*solution = t->set[pos]) | frq[0].m, solution);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work

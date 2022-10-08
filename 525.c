@@ -61,10 +61,16 @@ vscan(uint32_t mask, uint32_t *set)
 void
 find_skipped(uint32_t mask, uint32_t *sp)
 {
-	uint32_t *set, *end;
+	uint32_t n = __builtin_popcount(mask), *set, *end;
 
-	if (__builtin_popcount(mask) == 26)
+	if (n == 26)
 		return add_solution(sp - 4);
+
+	if (((8 - __builtin_popcount(mask & gv1)) * 5) + n < 26)
+		return;
+
+	if (((8 - __builtin_popcount(mask & gv2)) * 5) + n < 26)
+		return;
 
 	struct frequency *f = frq + __builtin_ctz(~mask);
 
@@ -83,10 +89,16 @@ find_skipped(uint32_t mask, uint32_t *sp)
 void
 find_solutions(uint32_t mask, uint32_t *sp)
 {
-	uint32_t *set, *end;
+	uint32_t n = __builtin_popcount(mask), *set, *end;
 
-	if (__builtin_popcount(mask) == 25)
+	if (n == 25)
 		return add_solution(sp - 4);
+
+	if (((8 - __builtin_popcount(mask & gv1)) * 5) + n < 25)
+		return;
+
+	if (((8 - __builtin_popcount(mask & gv2)) * 5) + n < 25)
+		return;
 
 	struct frequency *f = frq + __builtin_ctz(~mask);
 
@@ -108,17 +120,19 @@ solve_work()
 {
 	uint32_t solution[6] __attribute__((aligned(64)));
 	struct tier *t;
-	int32_t pos;
+	int32_t len, pos;
 
 	// Solve starting with least frequent set
-	t = frq[0].sets;
-	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions((*solution = t->s[pos]), solution);
+	t = frq[0].tiers;
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set0pos, 1)) < len)
+		find_solutions((*solution = t->set[pos]), solution);
 
 	// Solve after skipping least frequent set
-	t = frq[1].sets;
-	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_skipped((*solution = t->s[pos]) | frq[0].m, solution);
+	t = frq[1].tiers;
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set1pos, 1)) < len)
+		find_skipped((*solution = t->set[pos]) | frq[0].m, solution);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work

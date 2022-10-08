@@ -72,17 +72,23 @@ vscan(uint32_t mask, uint32_t *set, uint32_t *n)
 void
 find_skipped(uint32_t mask, uint32_t *sp)
 {
-	uint32_t n = __builtin_popcount(mask), *set, *end;
+	uint32_t *set, *end, n = __builtin_popcount(mask);
 
+	// Test for depth == 5
 	if (n == 26)
 		return add_solution(sp - 4);
 
-	if (((8 - __builtin_popcount(mask & gv1)) * 5) + n < 26)
+	// Derive actual depth [1, 2, 3, or 4] without division
+	n = (n - 2) >> 2;
+
+	// Check for pseudovowel search pruning
+	if (apcv1 + n < __builtin_popcount(mask & gv1))
 		return;
 
-	if (((8 - __builtin_popcount(mask & gv2)) * 5) + n < 26)
+	if (apcv2 + n < __builtin_popcount(mask & gv2))
 		return;
 
+	// Find the next unset letter
 	struct frequency *f = frq + __builtin_ctz(~mask);
 
 	CALCULATE_SET_AND_END;
@@ -102,16 +108,23 @@ find_skipped(uint32_t mask, uint32_t *sp)
 void
 find_solutions(uint32_t mask, uint32_t *sp)
 {
-	uint32_t n = __builtin_popcount(mask), *set, *end;
+	uint32_t *set, *end, n = __builtin_popcount(mask);
 
+	// Test for depth == 5
 	if (n == 25)
 		return add_solution(sp - 4);
 
-	if (((8 - __builtin_popcount(mask & gv1)) * 5) + n < 25)
-		return;
-	if (((8 - __builtin_popcount(mask & gv2)) * 5) + n < 25)
+	// Derive actual depth [1, 2, 3, or 4] without division
+	n = (n - 1) >> 2;
+
+	// Check for pseudovowel search pruning
+	if (apcv1 + n < __builtin_popcount(mask & gv1))
 		return;
 
+	if (apcv2 + n < __builtin_popcount(mask & gv2))
+		return;
+
+	// Find the next unset letter
 	struct frequency *f = frq + __builtin_ctz(~mask);
 
 	CALCULATE_SET_AND_END;
@@ -131,19 +144,21 @@ find_solutions(uint32_t mask, uint32_t *sp)
 static void
 solve_work()
 {
-	uint32_t solution[6] __attribute__((aligned(64)));
+	uint32_t solution[16] __attribute__((aligned(64)));
 	struct tier *t;
-	int32_t pos;
+	int32_t pos, len;
 
 	// Solve starting with least frequent set
-	t = frq[0].sets;
-	while ((pos = atomic_fetch_add(&set0pos, 1)) < t->l)
-		find_solutions((*solution = t->s[pos]), solution);
+	t = frq[0].tiers;
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set0pos, 1)) < len)
+		find_solutions((*solution = t->set[pos]), solution);
 
 	// Solve after skipping least frequent set
-	t = frq[1].sets;
-	while ((pos = atomic_fetch_add(&set1pos, 1)) < t->l)
-		find_skipped((*solution = t->s[pos]) | frq[0].m, solution);
+	t = frq[1].tiers;
+	len = t->end - t->set;
+	while ((pos = atomic_fetch_add(&set1pos, 1)) < len)
+		find_skipped((*solution = t->set[pos]) | frq[0].m, solution);
 
 	atomic_fetch_add(&solvers_done, 1);
 } // solve_work
@@ -160,4 +175,5 @@ solve()
 	// Wait for all solver threads to finish up
 	while(solvers_done < nthreads)
 		asm("nop");
+
 } // solve

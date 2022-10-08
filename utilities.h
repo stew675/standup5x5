@@ -7,7 +7,7 @@
 #define MAX_READERS            8	// No more than 8 ever needed
 
 static const char	*solution_filename = "solutions.txt";
-static const char	*search_order = "qjxzvfwkbgpmhydcntlrsuoiea";
+static const char	*search_order = "qjxzvfwkbgpmhydcntlruaeios";
 
 // Worker thread state
 static struct worker {
@@ -15,31 +15,32 @@ static struct worker {
 	char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
-// Set Pointers (32 bytes in size)
+// Set Pointers (8 bytes in size)
 static struct tier {
-	// Pointer to set
-	uint32_t	*s __attribute__ ((aligned(32)));
-	uint32_t	l;		// Length of set
-	uint32_t	toff1;		// Tiered Offset 1
-	uint32_t	toff2;		// Tiered Offset 2
-	uint32_t	toff3;		// Tiered Offset 3
-	uint32_t	tlen3;		// Length of toff3
-} tiers[26][16] __attribute__ ((aligned(64)));
+	uint32_t	*set;	// Offset to start of set
+	uint32_t	*end;	// Offset to end of set
+} tiers[26][64] __attribute__ ((aligned(64)));
 
 // Character frequency recording
 static struct frequency {
 	// Mask (1 << (c - 'a'))
 	uint32_t	m	__attribute__ ((aligned(64)));
+	uint32_t	f;		// Frequency
+
 	uint32_t	tm1;		// Tiered Mask 1
 	uint32_t	tm2;		// Tiered Mask 2
 	uint32_t	tm3;		// Tiered Mask 3
 	uint32_t	tm4;		// Tiered Mask 4
 	uint32_t	tm5;		// Tiered Mask 5
 	uint32_t	tm6;		// Tiered Mask 6
-	uint32_t	tmm;		// tm1 | tm2 | tm3 | tm4
-	int		ready;		// Is ready to set up
-//	int		b;		// char - 'a'
-	struct tier	*sets;
+
+	struct tier	*tiers;		// The set tiers
+
+	uint32_t	tmm;		// Logical OR of tm1..tm4
+
+	uint16_t	b;		// char - 'a'
+	uint16_t	ready;		// Ready to set up
+
 } frq[26] __attribute__ ((aligned(64)));
 
 // Keep atomic variables on their own CPU cache line
@@ -79,6 +80,10 @@ static	uint32_t	keys[MAX_WORDS + 1024] __attribute__ ((aligned(64)));
 static	uint32_t	tkeys[26][MAX_WORDS * 2] __attribute__ ((aligned(64)));
 static	uint32_t	remap[32] __attribute__((aligned(64)));
 
+// Per-reader frequency collation stats.  We set to 32, instead of just 26, to
+// ensure readers aren't sharing CPU cache lines (which are 64 bytes wide)
+static	uint32_t	cfs[MAX_READERS][32] __attribute__((aligned(64))) = {0};
+
 static void solve();
 static void solve_work();
 static void set_tier_offsets(struct frequency *f);
@@ -90,11 +95,12 @@ print_time_taken(char *label, struct timespec *ts, struct timespec *te)
 	time_taken *= (te->tv_sec - ts->tv_sec);
 	time_taken += (te->tv_nsec - ts->tv_nsec);
 
-	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000, (time_taken % 1000000000) / 1000);
+	printf("%-20s = %ld.%06lus\n", label, time_taken / 1000000000,
+				     (time_taken % 1000000000) / 1000);
 } // print_time_taken
  
-static uint32_t gv1 = 0;
-static uint32_t gv2 = 0;
+static uint32_t gv1 = 0, apcv1 = 0;
+static uint32_t gv2 = 0, apcv2 = 0;
 
 void
 build_remap()
@@ -111,16 +117,20 @@ build_remap()
 	gv1 |= remap[('r' & 0x1F)];
 	gv1 |= remap[('x' & 0x1F)];
 	gv1 |= remap[('y' & 0x1F)];
+	// Determine adjusted popcount for vowel1
+	apcv1 = __builtin_popcount(gv1) - 5;
 
-	// aeiouqty
+	// aeiouhst
 	gv2 |= remap[('a' & 0x1F)];
 	gv2 |= remap[('e' & 0x1F)];
 	gv2 |= remap[('i' & 0x1F)];
 	gv2 |= remap[('o' & 0x1F)];
 	gv2 |= remap[('u' & 0x1F)];
-	gv2 |= remap[('q' & 0x1F)];
+	gv2 |= remap[('h' & 0x1F)];
+	gv2 |= remap[('s' & 0x1F)];
 	gv2 |= remap[('t' & 0x1F)];
-	gv2 |= remap[('y' & 0x1F)];
+	// Determine adjusted popcount for vowel2
+	apcv2 = __builtin_popcount(gv2) - 5;
 } // build_remap
 
 
@@ -132,7 +142,7 @@ frq_init()
 	memset(frq, 0, sizeof(frq));
 
 	for (uint32_t b = 0; b < 26; b++) {
-		frq[b].sets = tiers[b];
+		frq[b].tiers = tiers[b];
 		frq[b].m = remap[search_order[b] & 0x1F];	// The bit mask
 	}
 } // frq_init
@@ -210,12 +220,10 @@ hash_insert(uint32_t key, uint32_t pos)
 		if (keymap[hashpos] == key)
 			return 0;
 
-		// Handle full hash table condition
-		if (++col == HASHSZ)
-			return 0;
-
 		if (++hashpos == HASHSZ)
 			hashpos = 0;
+
+		col++;
 	} while (1);
 
 	// Now insert at hash location
@@ -286,9 +294,9 @@ print_bits(char *label, uint64_t v)
 void
 find_words(char *s, char *e, uint32_t rn)
 {
-	char a = 'a', z = 'z';
-	char *fives[READ_CHUNK / 5];
+	char *fives[(READ_CHUNK / 6) + 1] __attribute__((aligned(64)));
 	char **fivep = fives;
+	char a = 'a', z = 'z';
 	int64_t msbset = 0x8000000000000000;
 
 #ifdef __AVX2__
@@ -419,10 +427,21 @@ find_words(char *s, char *e, uint32_t rn)
 	fivep = fives;
 	while (num--) {
 		char *w = *fivep++;
+
+		// Copy key to wordkeys array
 		wordkeys[pos] = calc_key(w);
 
 		// Copy word to word table as a single 64-bit copy
 		*(uint64_t *)(words + (pos++ << 3)) = *(uint64_t *)w;
+
+#if 0
+		// Get character frequencies
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++; key &= key - 1;
+		cf[__builtin_ctz(key)]++;
+#endif
 	}
 } // find_words
 
@@ -507,8 +526,7 @@ process_words()
 		}
 
 		*k = key;
-		k += hash_insert(key, pos);
-		pos++;
+		k += hash_insert(key, pos++);
 	}
 
 #ifdef HASH_TABLE_TIMES
@@ -686,59 +704,56 @@ emit_solutions()
 
 // ********************* FREQUENCY HANDLER ********************
 
+int
+by_frequency_hi(const void *a, const void *b)
+{
+	return ((struct frequency *)b)->f - ((struct frequency *)a)->f;
+} // by_frequency_hi
+
+
+#if 0
+		struct tier *t = f->tiers +		\
+			_pext_u32(mask, f->tmm);	\
+
+#endif
+
 #ifdef __BMI2__
-#define _USE_PEXT_U32_
-#endif
 
+#define CALCULATE_SET_AND_END				\
+	{						\
+		struct tier *t = &f->tiers[mask>>20];	\
+		set = t->set;				\
+		end = t->end;				\
+	}
 
-#ifdef _USE_PEXT_U32_
-#define GET_TIER struct tier *t = f->sets + _pext_u32(mask, f->tmm)
 #else
-#define GET_TIER struct tier *t = f->sets + !!(mask & f->tm1) +	\
-				     (!!(mask & f->tm2) << 1) +	\
-				     (!!(mask & f->tm3) << 2) +	\
-				     (!!(mask & f->tm4) << 3)
+
+#define CALCULATE_SET_AND_END				\
+	{						\
+		uint32_t tnum = !!(mask & f->tm1);	\
+		tnum |= (!!(mask & f->tm2) << 1);	\
+		tnum |= (!!(mask & f->tm3) << 2);	\
+		tnum |= (!!(mask & f->tm4) << 3);	\
+		tnum |= (!!(mask & f->tm5) << 4);	\
+		tnum |= (!!(mask & f->tm6) << 5);	\
+		struct tier *t = f->tiers + tnum;	\
+		set = t->set;				\
+		end = t->end;				\
+	}
+
 #endif
 
-// The sequence of instructions here is intended.  It achieves good concurrency
-// in the CPU by engaging both the ALU and AGU, which appears to be why f->tm5
-// tm6/tmm is faster than if using global variables or #defines
-
-#define CALCULATE_SET_AND_END					\
-	do {							\
-		GET_TIER;					\
-		uint32_t mf = !!(mask & f->tm5);		\
-		uint32_t ms = !(mask & f->tm6);			\
-		uint32_t off = t->toff3 + (ms * t->tlen3);	\
-		uint32_t mx = !(ms | mf) * t->toff1;		\
-		end = t->s + off;				\
-		set = t->s + mx + (mf * t->toff2);		\
-	} while (0)
 
 void
-setup_tkeys(struct frequency *f)
+setup_tkeys(struct frequency *f, uint32_t t0_toff1,
+		uint32_t t0_toff2, uint32_t t0_toff3)
 {
-	struct tier	*t0 = f->sets;
-	uint32_t	*kp = t0->s + t0->l + NUM_POISON;
+	struct tier	*t0 = f->tiers;
+	uint32_t	t0_len = t0->end - t0->set;
+	uint32_t	*kp = t0->end + NUM_POISON;
 	uint32_t	tm1 = f->tm1, tm2 = f->tm2;
 	uint32_t	tm3 = f->tm3, tm4 = f->tm4;
-	uint32_t	*ks, len;
 	uint32_t	masks[16];
-
-#ifdef _USE_PEXT_U32_
-	do {
-		// We need to use the order that _pext_u32() will use
-		uint32_t tmm = f->tmm;
-		tm1 = 1 << __builtin_ctz(tmm);
-		tmm &= tmm - 1;
-		tm2 = 1 << __builtin_ctz(tmm);
-		tmm &= tmm - 1;
-		tm3 = 1 << __builtin_ctz(tmm);
-		tmm &= tmm - 1;
-		tm4 = 1 << __builtin_ctz(tmm);
-		tmm &= tmm - 1;
-	} while (0);
-#endif
 
 	// Define the mask bitmaps for splitting the sets
 	masks[0]  = 0;
@@ -760,36 +775,69 @@ setup_tkeys(struct frequency *f)
 	masks[15] = tm4 | tm3 | tm2 | tm1;
 
 	// Create key arrays for each tier set mask
-	for (uint32_t mask, i = 1; i < 16; i++) {
-		struct tier *ts = f->sets + i;
-		mask = masks[i];
+	for (uint32_t i = 0; i < 16; i++) {
+		uint32_t toff1, toff2, toff3;
+		uint32_t *ts, *te;
+		uint32_t mask = masks[i];
 
-		ks = t0->s;
-		ts->s = kp;
+		if (i == 0) {
+			ts = t0->set;
+			toff1 = t0_toff1;
+			toff2 = t0_toff2;
+			toff3 = t0_toff3;
+			te = t0->end;
+		} else {
+			uint32_t *ks = t0->set;
 
-		len = t0->toff1;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->toff1 = kp - ts->s;
+			ts = kp;
 
-		len = t0->toff2 - t0->toff1;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->toff2 = kp - ts->s;
+			for (uint32_t len = t0_toff1; len--; )
+				kp += !((*kp = *ks++) & mask);
+			toff1 = kp - ts;
 
-		len = t0->toff3 - t0->toff2;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->toff3 = kp - ts->s;
+			for (uint32_t len = t0_toff2 - t0_toff1; len--; )
+				kp += !((*kp = *ks++) & mask);
+			toff2 = kp - ts;
 
-		len = t0->l - t0->toff3;
-		while (len--)
-			kp += !((*kp = *ks++) & mask);
-		ts->l = kp - ts->s;
-		ts->tlen3 = ts->l - ts->toff3;
+			for (uint32_t len = t0_toff3 - t0_toff2; len--; )
+				kp += !((*kp = *ks++) & mask);
+			toff3 = kp - ts;
 
-		for (uint32_t p = NUM_POISON; p--; )
-			*kp++ = (uint32_t)(~0);
+			for (uint32_t len = t0_len - t0_toff3; len--; )
+				kp += !((*kp = *ks++) & mask);
+
+			te = kp;
+
+			for (uint32_t p = NUM_POISON; p--; )
+				*kp++ = (uint32_t)(~0);
+		}
+
+		for (uint32_t tm5 = 0; tm5 < 2; tm5++) {
+			for (uint32_t tm6 = 0; tm6 < 2; tm6++) {
+				uint32_t tnum = i + ((tm5 << 4) | (tm6 << 5));
+				struct tier *tts = f->tiers + tnum;
+
+				assert(tnum < 64);
+
+				if (tm5) {
+					if (tm6) {
+						tts->set = ts + toff2;
+						tts->end = ts + toff3;
+					} else {
+						tts->set = ts + toff2;
+						tts->end = te;
+					}
+				} else {
+					if (tm6) {
+						tts->set = ts + toff1;
+						tts->end = ts + toff3;
+					} else {
+						tts->set = ts;
+						tts->end = te;
+					}
+				}
+			}
+		}
 	}
 } // setup_tkeys
 
@@ -806,8 +854,8 @@ set_tier_offsets(struct frequency *f)
 		asm("nop");
 
 	// "poison" NUM_POISON ending values with all bits set
-	struct tier *t = f->sets;
-	ks = t->s + t->l;
+	struct tier *t = f->tiers;
+	ks = t->end;
 	for (int p = NUM_POISON; p--; )
 		*ks++ = (uint32_t)(~0);
 
@@ -822,22 +870,35 @@ set_tier_offsets(struct frequency *f)
 	f->tm4 = remap['i' & 0x1F];
 	f->tm5 = remap['o' & 0x1F];
 	f->tm6 = remap['s' & 0x1F];
-	f->tmm = (f->tm1 | f->tm2 | f->tm3 | f->tm4);
+
+	// f->tmm is the aggregate of all individual tier masks
+	f->tmm = f->tm1 | f->tm2 | f->tm3 | f->tm4 | f->tm5 | f->tm6;
+
+	// Normalise the f->tm* masks according to bit order
+	mask = f->tmm;
+
+	f->tm1 = 1 << __builtin_ctz(mask); mask &= mask - 1;
+	f->tm2 = 1 << __builtin_ctz(mask); mask &= mask - 1;
+	f->tm3 = 1 << __builtin_ctz(mask); mask &= mask - 1;
+	f->tm4 = 1 << __builtin_ctz(mask); mask &= mask - 1;
+	f->tm5 = 1 << __builtin_ctz(mask); mask &= mask - 1;
+	f->tm6 = 1 << __builtin_ctz(mask);
 
 	// Organise full set into 2 subsets, that which
 	// has tm5 followed by that which does not
 
+	uint32_t toff1, toff2, toff3;
 	mask = f->tm5;
 
 	// First subset has tm5, and then not
-	ks = kp = t->s;
-	len = t->l;
+	ks = kp = t->set;
+	len = t->end - kp;
 	for (; len--; ++ks)
 		if ((key = *ks) & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	t->toff2 = kp - t->s;
+	toff2 = kp - t->set;
 
 	// Now organise the first tm5 subset into that which
 	// has tm6 followed by that which does not, and then
@@ -846,28 +907,27 @@ set_tier_offsets(struct frequency *f)
 
 	mask = f->tm6;
 
-	// First tm1 subset has tm2 then not
-	ks = kp = t->s;
-	len = t->toff2;
+	// First tm5 subset has tm6 then not
+	ks = kp = t->set;
+	len = toff2;
 	for (; len--; ++ks)
 		if ((key = *ks) & mask) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	t->toff1 = kp - t->s;
+	toff1 = kp - t->set;
 
 	// Second tm5 subset does not have tm6 then has
-	ks = kp = t->s + t->toff2;
-	len = t->l - t->toff2;
+	ks = kp = t->set + toff2;
+	len = t->end - kp;
 	for (; len--; ++ks)
 		if (!((key = *ks) & mask)) {
 			*ks = *kp;
 			*kp++ = key;
 		}
-	t->toff3 = kp - t->s;
-	t->tlen3 = t->l - t->toff3;
+	toff3 = kp - t->set;
 
-	setup_tkeys(f);
+	setup_tkeys(f, toff1, toff2, toff3);
 
 set_tier_offsets_done:
 	// Mark as done
@@ -926,10 +986,9 @@ setup_frequency_sets()
 	// Start worker threads
 	for (int i = 0; i < 26; i++) {
 		struct frequency *f = frq + i;
-		struct tier *t = f->sets;
 
-		t->s = tkeys[i];
-		t->l = bp[i] - t->s;
+		f->tiers[0].set = tkeys[i];
+		f->tiers[0].end = bp[i];
 
 		// Instruct any waiting worker thread to start setup
 		// but we have to do it ourselves if single threaded
@@ -1025,10 +1084,9 @@ main(int argc, char *argv[])
 
 	printf("\nFrequency Table:\n");
 	for (int i = 0; i < 26; i++) {
-		struct tier *t = frq[i].sets;
+		struct tier *t = frq[i].tiers;
 		char c = 'a' + __builtin_ctz(frq[i].m);
-		printf("%c set_length=%4d  toff1=%4d, toff2=%4d, toff[3]=%4d\n",
-			c, t->l, t->toff1, t->toff2, t->toff3);
+		printf("%c set_length=%4ld\n", c, t->end - t->set);
 	}
 	printf("\n\n");
 
