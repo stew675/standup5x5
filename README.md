@@ -11,7 +11,7 @@ Just run make and execute `./a25 -v`, `./s25 -v`, `./v25 -v` or `./525 -v`
 
 NB: Omit the **-v** option if planning to use the `time` shell call
 
-I've set the default compiler to `clang-12` in the Makefile, as this produces
+I've set the default compiler to `clang-13` in the Makefile, as this produces
 the fastest executables in my testing, but edit the Makefile and switch to
 `gcc` if that's what you have
 
