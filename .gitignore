@@ -5,3 +5,8 @@ v25
 combos
 solutions.txt
 rescan.c
+*.swp
+build_header
+words_alpha.h
+words_alpha_five.h
+nyt_wordle.h
