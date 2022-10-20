@@ -1,5 +1,9 @@
 #include <immintrin.h>
 
+#include "words_alpha.h"
+#include "words_alpha_five.h"
+#include "nyt_wordle.h"
+
 #define HASHBITS              15
 #define MAX_SOLUTIONS       8192
 #define MAX_WORDS           8192
@@ -10,8 +14,8 @@ static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
 static struct worker {
-	char     *start;
-	char     *end;
+	const char     *start;
+	const char     *end;
 } workers[MAX_THREADS] __attribute__ ((aligned(64)));
 
 // Set Pointers (32 bytes in size)
@@ -258,10 +262,10 @@ print_bits(char *label, uint64_t v)
 #define READ_CHUNK        65536		// Appears to be optimum
 
 void
-find_words(char *s, char *e, uint32_t rn)
+find_words(const char *s, const char *e, uint32_t rn)
 {
-	char *fives[(READ_CHUNK / 6) + 1] __attribute__((aligned(64)));
-	char **fivep = fives;
+	const char *fives[(READ_CHUNK / 6) + 1] __attribute__((aligned(64)));
+	const char ** fivep = fives;
 	char a = 'a', z = 'z';
 	int64_t msbset = 0x8000000000000000;
 	uint32_t *cf = cfs[rn];
@@ -322,7 +326,7 @@ find_words(char *s, char *e, uint32_t rn)
 
 		// Calculate where to start the next loop pass and invalidate
 		// everything after the last non-lower case letter
-		char *ns = s + 64;
+		const char *ns = s + 64;
 		uint32_t nlz = __builtin_clzll(wmask);
 		ns -= nlz;
 		wmask |= (msbset >> nlz);
@@ -346,7 +350,7 @@ find_words(char *s, char *e, uint32_t rn)
 		// Process all 5 letter words in the vector
 		while (wmask) {
 			// Get a pointer to the start of the 5 letter word
-			char *w = s + __builtin_ctzll(wmask);
+			const char *w = s + __builtin_ctzll(wmask);
 
 			// Add word to our list
 			*fivep = w;
@@ -364,7 +368,8 @@ find_words(char *s, char *e, uint32_t rn)
 
 	// Scalar code to find 5 words. This also
 	// handles residuals from the vector loop
-	for (char c, *w = s; s < e; w = s) {
+	const char* w = s;
+	for (char c; s < e; w = s) {
 		c = *s++; if ((c < a) || (c > z)) continue;
 		c = *s++; if ((c < a) || (c > z)) continue;
 		c = *s++; if ((c < a) || (c > z)) continue;
@@ -393,7 +398,7 @@ find_words(char *s, char *e, uint32_t rn)
 	int pos = atomic_fetch_add(&num_words, num);
 	fivep = fives;
 	while (num--) {
-		char *w = *fivep++;
+		const char *w = *fivep++;
 
 		// Copy word to word table as a single 64-bit copy
 		*(uint64_t *)(words + (pos << 3)) = *(uint64_t *)w;
@@ -429,9 +434,9 @@ file_reader(struct worker *work)
 	// processing the chunk before it can catch the word that may
 	// have been skipped by the reader ahead of it
 	do {
-		char *s = work->start;
+		const char *s = work->start;
 		s += atomic_fetch_add(&file_pos, READ_CHUNK);
-		char *e = s + (READ_CHUNK + 1);
+		const char *e = s + (READ_CHUNK + 1);
 
 		if (s > work->end)
 			break;
@@ -556,9 +561,9 @@ work_pool(void *arg)
 } // work_pool
 
 void
-spawn_readers(char *start, size_t len)
+spawn_readers(const char *start, size_t len)
 {
-	char *end = start + len;
+	const char *end = start + len;
 
 	num_readers = (len / READ_CHUNK) + 1;
 
@@ -596,35 +601,42 @@ spawn_readers(char *start, size_t len)
 void
 read_words(char *path)
 {
-	int fd;
+    if (!strcmp(path, "words_alpha.txt")) {
+        spawn_readers(words_alpha, words_alpha_len);
+    } else if (!strcmp(path, "words_alpha_five.txt")) {
+        spawn_readers(words_alpha_five, words_alpha_five_len);
+    } else if (!strcmp(path, "nyt_wordle.txt")) {
+        spawn_readers(nyt_wordle, nyt_wordle_len);
+    } else {
+        int fd;
 
+        if ((fd = open(path, O_RDONLY)) < 0) {
+            perror("open");
+            exit(EXIT_FAILURE);
+        }
 
-	if ((fd = open(path, O_RDONLY)) < 0) {
-		perror("open");
-		exit(EXIT_FAILURE);
-	}
+        struct stat statbuf[1];
+        if (fstat(fd, statbuf) < 0) {
+            perror("fstat");
+            exit(EXIT_FAILURE);
+        }
 
-	struct stat statbuf[1];
-	if (fstat(fd, statbuf) < 0) {
-		perror("fstat");
-		exit(EXIT_FAILURE);
-	}
+        size_t len = statbuf->st_size;
+        char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (addr == MAP_FAILED) {
+            perror("mmap");
+            exit(EXIT_FAILURE);
+        }
 
-	size_t len = statbuf->st_size;
-	char *addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
-	if (addr == MAP_FAILED) {
-		perror("mmap");
-		exit(EXIT_FAILURE);
-	}
+        // Safe to close file now.  mapping remains until munmap() is called
+        close(fd);
 
-	// Safe to close file now.  mapping remains until munmap() is called
-	close(fd);
-
-	// Start file reader threads
-	spawn_readers(addr, len);
+        // Start file reader threads
+        spawn_readers(addr, len);
 
 	// We don't explicitly call munmap() as this can be slowish on some systems
 	// Instead we'll just let the process terminate and it'll get unmapped then
+    }
 } // read_words
 
 

@@ -5,7 +5,9 @@
 
 #include <sys/mman.h>
 #include <sys/stat.h>
+#ifndef __APPLE__
 #include <sys/sysinfo.h>
+#endif
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdint.h>
