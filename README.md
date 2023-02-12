@@ -78,6 +78,7 @@ So I needed to redesign
 
 
 ### a25
+![image](https://user-images.githubusercontent.com/116349156/218329328-36e99b94-4100-4fde-a5b3-59ac948e129a.png)
 
 This was my 2nd attempt at a full solution.  It implements a more generic version
 of my first attempt.  Instead of using 2-vowel and 1-vowel words, it split the
@@ -95,6 +96,7 @@ input into multiple sets grew into my third solution attempt.
 
 
 ### s25
+![image](https://user-images.githubusercontent.com/116349156/218329336-44f441ac-9ca8-4182-a57a-80ed7189b6f9.png)
 
 I've included `combos.c` which is non-functional pseudo-code that formed the
 basis of `s25`.  I wrote a frequency implementation that originally ordered
@@ -132,6 +134,7 @@ words-alpha-five.txt or NYT files as input.
 
 
 ### v25
+![image](https://user-images.githubusercontent.com/116349156/218329348-02fabb20-81ca-4a90-8ea7-56ce4dda183c.png)
 
 `v25.c` is just `s25.c` but with AVX2 instructions added for processing the
 key sets.  The use of AVX-2 saw the main algorithm loop be sped up by almost
@@ -140,6 +143,7 @@ was a fun learning experience.
 
 
 ### 525
+![image](https://user-images.githubusercontent.com/116349156/218329364-0935aec8-28f5-4996-9602-ef22dca5e0b0.png)
 
 `525.c` is `v25.c` with AVX-512 instructions, instead of AVX2.  This will not
 compile successfully on any platform that does not support AVX-512.
@@ -260,4 +264,4 @@ since that's what people seem to be doing, so I included the full set here.
 Thank you to Matt Parker for making the problem public, and all the intelligent
 and robust discussion of solutions in the Youtube comments, and a big thank you
 to Sylvester Hesp for his approach to the set skipping issue, and to Landon
-Kryger for his insightful algorithm improvements!
+Kryger for his insightful algorithm improvements! Screenshots taken on Intel i5-11400F @ 2.6 GHz with 10 threads
