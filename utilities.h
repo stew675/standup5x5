@@ -6,6 +6,37 @@
 #define MAX_THREADS           16
 #define MAX_READERS            8	// No more than 8 ever needed
 
+// Just a handy debugging function which was used when developing the
+// 5 letter word extraction bit masking algorithm within find_words()
+void
+print_bits32(char *label, uint32_t v)
+{
+	printf("%s ", label);
+	for (int i = 0; i < 32; i++) {
+		if (v >> 31)
+			printf("1");
+		else
+			printf("0");
+		v <<= 1;
+	}
+	printf("\n");
+} // print_bits32
+
+void
+print_bits(char *label, uint64_t v)
+{
+	printf("%s ", label);
+	for (int i = 0; i < 64; i++) {
+		if (v >> 63)
+			printf("1");
+		else
+			printf("0");
+		v <<= 1;
+	}
+	printf("\n");
+} // print_bits
+
+
 static const char	*solution_filename = "solutions.txt";
 
 // Worker thread state
@@ -148,110 +179,49 @@ calc_key(const char *wd)
 	return key >> 1;
 } // calc_key
 
-//********************* HASH TABLE FUNCTIONS **********************
-
-// A very simple for-purpose hash map implementation.  Used to
-// lookup words given the key representation of that word
-// I've included 3 decent key_hash() functions here. All should
-// work decently for most English 5-letter words @ HASHBITS = 15
-
-#define	HASHSZ          (1 << HASHBITS)
-#define HASHMASK        (HASHSZ - 1)
-#define key_hash(x)	(((x * 5287) ^ (x >> 11)) & HASHMASK)
-//#define key_hash(x)	(((x * 13334) ^ x ^ (x >> 12)) & HASHMASK)
-//#define key_hash(x)	(x ^ (x >> 6) ^ (x >> 10) ^ (~x >> 1)) & HASHMASK
-
-// Key Hash Entries
-// We keep keys and positions in separate array because faster to initialise
-uint32_t keymap[HASHSZ] __attribute__ ((aligned(64)));
-uint32_t posmap[HASHSZ] __attribute__ ((aligned(64)));
+// Since no duplicates and no anagrams are allowed, every possible word can be represented
+// as a bit-sequence of 26 bits. This implies, there are only 2^26 possible different words.
+// To store 2^26 different words, we only need 2^26 booleans, which we may store in a bitset
+// of 2^(26-3) bytes. I did not think about if the posmap is still required, however to make this
+// approach work asap, I just adapted the posmap approach to mine. The posmap requires 2^28 bytes
+// of memory and according to the already build in benchmarks, initializing the posmap is negligible.
+uint8_t* keymap_lu;
+uint32_t* posmap_lu;
 
 static void
 hash_init()
 {
-	memset(keymap, 0, sizeof(keymap));
+  // 2^26 possible entries
+  keymap_lu = malloc(1 << 23);
+  memset(keymap_lu, 0, 1 << 23);
+  posmap_lu = malloc(1 << 28);
+  memset(posmap_lu, 0, 1 << 28);
 } // hash_init
 
+const char* hash_lookup(uint32_t key);
 uint32_t
 hash_insert(uint32_t key, uint32_t pos)
 {
-	uint32_t col = 0, hashpos = key_hash(key);
-
-	do {
-		// Check if we can insert at this position
-		if (keymap[hashpos] == 0)
-			break;
-
-		// Check if duplicate key
-		if (keymap[hashpos] == key)
-			return 0;
-
-		if (++hashpos == HASHSZ)
-			hashpos = 0;
-
-		col++;
-	} while (1);
-
-	// Now insert at hash location
-	keymap[hashpos] = key;
-	posmap[hashpos] = pos << 3;
-
-	hash_collisions += col;
-
-	return 1;
+  uint32_t inserted = 1;
+  if (!hash_lookup(key)) {
+    keymap_lu[key / 8] |= 1 << (key % 8);
+    posmap_lu[key] = pos << 3;
+  }
+  else
+    inserted = 0;
+  return inserted;
 } // hash_insert
 
 const char *
 hash_lookup(uint32_t key)
 {
-	uint32_t hashpos = key_hash(key);
-
-	do {
-		// Check for a match
-		if (keymap[hashpos] == key)
-			break;
-
-		// Check the not-in-hash scenario
-		if (keymap[hashpos] == 0)
-			return NULL;
-
-		if (++hashpos == HASHSZ)
-			hashpos = 0;
-	} while (1);
-
-	return words + posmap[hashpos];
+  const char* w = NULL;
+  if (keymap_lu[key / 8] & (1 << (key % 8)))
+    w = words + posmap_lu[key];
+  return w;
 } // hash_lookup
 #undef key_hash
 
-// Just a handy debugging function which was used when developing the
-// 5 letter word extraction bit masking algorithm within find_words()
-void
-print_bits32(char *label, uint32_t v)
-{
-	printf("%s ", label);
-	for (int i = 0; i < 32; i++) {
-		if (v >> 31)
-			printf("1");
-		else
-			printf("0");
-		v <<= 1;
-	}
-	printf("\n");
-} // print_bits32
-
-void
-print_bits(char *label, uint64_t v)
-{
-	printf("%s ", label);
-	for (int i = 0; i < 64; i++) {
-		if (v >> 63)
-			printf("1");
-		else
-			printf("0");
-		v <<= 1;
-	}
-	printf("\n");
-} // print_bits
 
 // ********************* FILE READER ********************
 
